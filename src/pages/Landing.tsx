@@ -67,10 +67,10 @@ function AuthModal({ onClose }: { onClose: () => void }) {
         <h2 className="text-center font-display text-3xl text-gradient-gold">
           {mode === 'signin' ? 'Enter the Council' : 'Join the Council'}
         </h2>
-        <p className="text-center text-[13px] text-[#a99a7c] mt-1 mb-6">Your deliberations, kept in sacred memory.</p>
+        <p className="text-center text-[13px] text-[#a99a7c] mt-1 mb-6">Your conversations, kept in sacred memory.</p>
 
         <button
-          onClick={() => signInWithGoogle()}
+          onClick={() => signInWithGoogle('The Council')}
           className="w-full flex items-center justify-center gap-3 py-3 rounded-xl bg-[#f5efe2] text-[#2a2118] font-medium hover:brightness-105 transition-all mb-4"
         >
           <svg width="18" height="18" viewBox="0 0 48 48">
@@ -292,8 +292,8 @@ export default function Landing() {
       {/* features */}
       <section className="relative z-10 max-w-6xl mx-auto px-5 py-24">
         <div className="text-center mb-14">
-          <p className="text-[12px] tracking-[0.3em] uppercase text-[#c9a24a] mb-3">The Architecture</p>
-          <h2 className="font-display text-4xl sm:text-5xl text-gradient-gold">A Chamber of Minds</h2>
+          <p className="text-[12px] tracking-[0.3em] uppercase text-[#c9a24a] mb-3">The Craft</p>
+          <h2 className="font-display text-4xl sm:text-5xl text-gradient-gold">Crafted to Reason Deeply</h2>
         </div>
         <div className="grid sm:grid-cols-3 gap-4">
           {features.map((f, i) => (

@@ -19,15 +19,40 @@ const AGENT_ID_BY_MODEL = {
   'nemotron-3-ultra-free': 'oracle',
 };
 
-// Strip underlying provider/model keys from a persisted message before it is
-// returned to the browser (covers both new rows and legacy rows).
+// Legacy persona names -> neutral single-model "Reasoning Stream" labels, so
+// old history reads as one model's parallel streams (never separate agents).
+const STREAM_NAME = {
+  sage: 'Reasoning Stream I',
+  analyst: 'Reasoning Stream II',
+  skeptic: 'Reasoning Stream III',
+  reckoner: 'Reasoning Stream IV',
+  atomist: 'Reasoning Stream V',
+  oracle: 'Reasoning Stream',
+};
+const STREAM_TITLE = {
+  sage: 'Logical derivation',
+  analyst: 'Structural analysis',
+  skeptic: 'Error-checking pass',
+  reckoner: 'Numerical computation',
+  atomist: 'First-principles decomposition',
+  oracle: 'Direct reasoning',
+};
+
+// Strip underlying provider/model keys AND legacy persona names from a
+// persisted message before returning it (covers both new and legacy rows).
 function sanitizeMessage(m) {
   const out = { ...m };
   if (out.model_used) out.model_used = LEGACY_MODEL_NAMES[out.model_used] || out.model_used;
   if (Array.isArray(out.council)) {
-    out.council = out.council.map((c) => {
+    out.council = out.council.map((c, i) => {
       const { model, ...rest } = c || {};
-      return { ...rest, agentId: rest.agentId || AGENT_ID_BY_MODEL[model] || 'oracle' };
+      const agentId = rest.agentId || AGENT_ID_BY_MODEL[model] || 'oracle';
+      return {
+        ...rest,
+        agentId,
+        name: STREAM_NAME[agentId] || `Reasoning Stream ${i + 1}`,
+        title: STREAM_TITLE[agentId] || 'Reasoning',
+      };
     });
   }
   return out;

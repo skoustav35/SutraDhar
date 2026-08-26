@@ -161,7 +161,7 @@ export function useCouncil() {
       onFinalMessage({
         id: `a-${Date.now()}`,
         role: 'assistant',
-        content: `> The council could not convene. **${msg}**\n\nPlease try again.`,
+        content: `> Sutradhar could not start. **${msg}**\n\nPlease try again.`,
         council: rosterFor(mode),
         mode,
       });
@@ -196,7 +196,7 @@ export function useCouncil() {
       onFinalMessage({
         id: `a-${Date.now()}`,
         role: 'assistant',
-        content: '> The council is still deliberating in the background. Reopen this chat shortly to see the completed answer.',
+        content: '> Sutradhar is still reasoning in the background. Reopen this chat shortly to see the completed answer.',
         council: rosterFor(mode),
         mode,
       });

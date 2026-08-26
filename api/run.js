@@ -14,7 +14,7 @@ try {
 function rosterFor(mode) {
   const cfg = MODE_CONFIGS[mode] || MODE_CONFIGS.trio;
   if (!cfg.synthesize) {
-    return [{ model: cfg.models[0], agentId: 'oracle', name: 'Oracle', title: 'The Direct Voice', status: 'answering', reasoning: '', content: '', final: '', review: '', error: null }];
+    return [{ model: cfg.models[0], agentId: 'oracle', name: 'Reasoning Stream', title: 'Direct reasoning', status: 'answering', reasoning: '', content: '', final: '', review: '', error: null }];
   }
   return cfg.models.map((model) => {
     const m = COUNCIL[model];
@@ -57,7 +57,7 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history }) {
   const byModel = Object.fromEntries(council.map((c) => [c.model, c]));
   let finalAcc = '';
   let phase = cfg.synthesize ? 'solving' : 'answering';
-  let note = cfg.synthesize ? `${council.length} scholars solving independently…` : 'The Oracle is answering…';
+  let note = cfg.synthesize ? `Sutradhar is reasoning across ${council.length} parallel streams…` : 'Sutradhar is reasoning…';
   let lastWrite = 0;
 
   const flush = async (force = false) => {
@@ -75,10 +75,10 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history }) {
   const onProgress = (ev) => {
     const t = ev.type;
     if (t === 'stage') {
-      if (ev.stage === 'solving') { phase = 'solving'; note = `${council.length} scholars solving independently…`; }
-      else if (ev.stage === 'cross-checking') { phase = 'cross-checking'; note = 'Scholars cross-examining each other…'; }
-      else if (ev.stage === 'judging') { phase = 'judging'; note = 'The Chief Justice is deliberating…'; }
-      else if (ev.stage === 'answering') { phase = 'answering'; note = 'The Oracle is answering…'; }
+      if (ev.stage === 'solving') { phase = 'solving'; note = `Sutradhar is reasoning across ${council.length} parallel streams…`; }
+      else if (ev.stage === 'cross-checking') { phase = 'cross-checking'; note = 'Sutradhar is cross-verifying its own reasoning…'; }
+      else if (ev.stage === 'judging') { phase = 'judging'; note = 'Sutradhar is converging to the final answer…'; }
+      else if (ev.stage === 'answering') { phase = 'answering'; note = 'Sutradhar is reasoning…'; }
       else if (ev.stage === 'done') { phase = 'done'; note = ''; }
       flush();
     } else if (t === 'solver_start') {
@@ -120,7 +120,7 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history }) {
 
     // Guaranteed-answer rescue if the pipeline produced nothing.
     if (!finalAcc.trim()) {
-      note = 'Summoning the Oracle for a direct solution…';
+      note = 'Sutradhar is composing a direct solution…';
       await flush(true);
       const rescueModels = [JUDGE_MODEL, 'big-pickle', 'deepseek-v4-flash-free'];
       for (const rm of rescueModels) {

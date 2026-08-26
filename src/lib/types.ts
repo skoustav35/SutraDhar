@@ -53,6 +53,45 @@ export interface ApiKey {
   created_at: string;
 }
 
+export interface Agent {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  description: string;
+  system_prompt: string;
+  skills: string[];
+  connectors: string[];
+  created_by_ai: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface Connector {
+  id: string;
+  provider: string;
+  account_label: string;
+  status: string;
+  scopes: string[];
+  connected_at: string;
+}
+
+export interface ScheduledTask {
+  id: string;
+  agent_id: string | null;
+  title: string;
+  prompt: string;
+  cadence: string;
+  run_time: string;
+  next_run: string | null;
+  last_run: string | null;
+  enabled: boolean;
+  status: string;
+  created_at: string;
+}
+
+export type NavSection = 'chats' | 'agents' | 'connectors' | 'tasks';
+
 interface RosterMember { agentId: string; name: string; title: string }
 
 export interface ModeConfig {
@@ -70,37 +109,38 @@ export const MODES: Record<Mode, ModeConfig> = {
     id: 'direct',
     label: 'Sutradhar 6.7 Lite',
     short: 'Lite',
-    desc: 'A single self-contained reasoning model answering directly. Fastest, best for everyday queries.',
+    desc: 'A fast, efficient model for everyday questions and general reasoning. Lowest latency.',
     synthesize: false,
     crosscheck: false,
-    roster: [{ agentId: 'oracle', name: 'Oracle', title: 'The Direct Voice' }],
+    roster: [{ agentId: 'oracle', name: 'Reasoning Stream', title: 'Direct reasoning' }],
   },
   trio: {
     id: 'trio',
     label: 'Sutradhar 6.7 Ultra',
     short: 'Ultra',
-    desc: 'A tri-agent reasoning core: three internal threads solve, cross-verify, then a synthesis layer adjudicates.',
+    desc: 'Our flagship model — deep, high-accuracy reasoning with self-verification for hard, multi-step problems.',
     synthesize: true,
     crosscheck: true,
+    // Internal parallel reasoning streams of the SINGLE model (not separate models).
     roster: [
-      { agentId: 'sage', name: 'Vachaspati', title: 'The Deep Logic Sage' },
-      { agentId: 'analyst', name: 'Bhaskara', title: 'The Structural Analyst' },
-      { agentId: 'skeptic', name: 'Charvaka', title: 'The Skeptic' },
+      { agentId: 'sage', name: 'Reasoning Stream I', title: 'Logical derivation' },
+      { agentId: 'analyst', name: 'Reasoning Stream II', title: 'Structural analysis' },
+      { agentId: 'skeptic', name: 'Reasoning Stream III', title: 'Error-checking pass' },
     ],
   },
   council: {
     id: 'council',
     label: 'Sutradhar 6.7 Extreme',
     short: 'Extreme',
-    desc: 'A five-agent deliberative core with full cross-examination and a chief adjudicator. Deepest reasoning.',
+    desc: 'Our most capable model — maximum reasoning depth for the very hardest challenges.',
     synthesize: true,
     crosscheck: true,
     roster: [
-      { agentId: 'sage', name: 'Vachaspati', title: 'The Deep Logic Sage' },
-      { agentId: 'analyst', name: 'Bhaskara', title: 'The Structural Analyst' },
-      { agentId: 'skeptic', name: 'Charvaka', title: 'The Skeptic' },
-      { agentId: 'reckoner', name: 'Aryabhata', title: 'The Celestial Reckoner' },
-      { agentId: 'atomist', name: 'Kanada', title: 'The Atomist' },
+      { agentId: 'sage', name: 'Reasoning Stream I', title: 'Logical derivation' },
+      { agentId: 'analyst', name: 'Reasoning Stream II', title: 'Structural analysis' },
+      { agentId: 'skeptic', name: 'Reasoning Stream III', title: 'Error-checking pass' },
+      { agentId: 'reckoner', name: 'Reasoning Stream IV', title: 'Numerical computation' },
+      { agentId: 'atomist', name: 'Reasoning Stream V', title: 'First-principles decomposition' },
     ],
   },
 };

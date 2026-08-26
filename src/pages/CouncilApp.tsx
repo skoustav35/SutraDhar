@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { Menu } from 'lucide-react';
 import supabase from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCouncil } from '../hooks/useCouncil';
-import type { ChatMessage, ChatSummary, CouncilMember, Mode } from '../lib/types';
+import type { ChatMessage, ChatSummary, CouncilMember, Mode, NavSection, Agent } from '../lib/types';
 import { rosterFor } from '../lib/types';
 import Sidebar from '../components/Sidebar';
 import ChatCanvas from '../components/ChatCanvas';
 import CouncilPane from '../components/CouncilPane';
+import AgentsPanel from '../components/AgentsPanel';
+import ConnectorsPanel from '../components/ConnectorsPanel';
+import TasksPanel from '../components/TasksPanel';
+
+const ASK_CAPABILITY =
+  'If you need clarification before answering, you MAY ask the user ONE concise question by emitting a block exactly like [[ASK]]{"question":"...","options":["...","..."],"allowManual":true}[[/ASK]] and nothing after it. Only ask when genuinely needed.';
 
 async function authHeaders(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
@@ -30,11 +37,47 @@ export default function CouncilApp() {
   const [councilOpen, setCouncilOpen] = useState(true);
   const [restoredCouncil, setRestoredCouncil] = useState<CouncilMember[] | null>(null);
   const [mode, setMode] = useState<Mode>('trio');
+  const [section, setSection] = useState<NavSection>('chats');
+  const [counts, setCounts] = useState({ agents: 0, connectors: 0, tasks: 0 });
+  const [activeAgent, setActiveAgent] = useState<Agent | null>(null);
 
   const setActive = useCallback((id: string | null) => {
     activeIdRef.current = id;
     setActiveId(id);
   }, []);
+
+  const loadCounts = useCallback(async () => {
+    try {
+      const h = await authHeaders();
+      const [a, c, t] = await Promise.all([
+        fetch('/api/agents', { headers: h }),
+        fetch('/api/connectors', { headers: h }),
+        fetch('/api/tasks', { headers: h }),
+      ]);
+      setCounts({
+        agents: a.ok ? (await a.json()).length : 0,
+        connectors: c.ok ? (await c.json()).length : 0,
+        tasks: t.ok ? (await t.json()).length : 0,
+      });
+    } catch { /* noop */ }
+  }, []);
+
+  useEffect(() => { loadCounts(); }, [loadCounts]);
+
+  const goSection = useCallback((s: NavSection) => {
+    setSection(s);
+    setSidebarOpen(false);
+  }, []);
+
+  const chatWithAgent = useCallback((a: Agent) => {
+    setActiveAgent(a);
+    setSection('chats');
+    setActive(null);
+    setMessages([]);
+    setRestoredCouncil(null);
+    reset();
+    setBusy(false);
+  }, [reset, setActive]);
 
   const loadChats = useCallback(async () => {
     try {
@@ -59,7 +102,7 @@ export default function CouncilApp() {
       const msgs: ChatMessage[] = rows.map((r: { id: string; role: string; content: string; council: CouncilMember[] | null }) => ({
         id: r.id,
         role: r.role === 'user' ? 'user' : 'assistant',
-        content: r.content,
+        content: r.role === 'user' ? r.content.replace(/<<CTX>>[\s\S]*?<<END>>\s*/g, '') : r.content,
         council: r.council,
       }));
       if (activeIdRef.current !== id) return;
@@ -100,9 +143,44 @@ export default function CouncilApp() {
     setBusy(false);
   }, [reset, setActive]);
 
+  // Detect a request to create/build an agent.
+  const isAgentRequest = (t: string) =>
+    /\b(create|make|build|forge|set\s?up|design)\b[^.!?]*\bagent\b/i.test(t) ||
+    /\bagent\b[^.!?]*\b(that|which|to)\b/i.test(t) && /\b(create|make|build)\b/i.test(t);
+
+  const forgeAgent = useCallback(async (text: string) => {
+    setBusy(true);
+    const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', content: text };
+    const thinking: ChatMessage = { id: `a-${Date.now()}`, role: 'assistant', content: '🪷 Forging your agent…' };
+    setMessages((prev) => [...prev, userMsg, thinking]);
+    try {
+      const res = await fetch('/api/agent-forge', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ request: text, save: true }) });
+      const j = await res.json();
+      if (j.ok && j.agent) {
+        const a = j.agent as Agent;
+        const card = `## ${a.emoji} Agent created — **${a.name}**\n\n${a.description}\n\n**Skills:** ${a.skills.join(', ') || '—'}\n\n**Connectors:** ${a.connectors.join(', ') || '—'}\n\n> Manage it in the **Agents** tab, or start chatting with it there. You can edit its name, skills, connectors and persona anytime.`;
+        setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: card } : m)));
+        loadCounts();
+      } else {
+        setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: `> I couldn't design that agent (${j.error || 'try rephrasing'}).` } : m)));
+      }
+    } catch {
+      setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: '> Agent forge failed. Please try again.' } : m)));
+    } finally {
+      setBusy(false);
+    }
+  }, [loadCounts]);
+
   const send = useCallback(
     async (text: string) => {
       if (busy) return;
+
+      // AI-driven agent creation intent (only in general chat, not agent chat)
+      if (!activeAgent && isAgentRequest(text)) {
+        await forgeAgent(text);
+        return;
+      }
+
       setBusy(true);
       setRestoredCouncil(null);
       const startChatId = activeIdRef.current;
@@ -111,26 +189,35 @@ export default function CouncilApp() {
       setMessages((prev) => [...prev, userMsg]);
       if (mode !== 'direct' && window.innerWidth >= 1024) setCouncilOpen(true);
 
+      // Build the effective prompt: agent persona + ask capability preamble,
+      // wrapped in a sentinel so it can be stripped from the displayed message.
+      const preambleParts: string[] = [];
+      if (activeAgent) {
+        preambleParts.push(
+          `Agent persona — you are "${activeAgent.name}". ${activeAgent.system_prompt || activeAgent.description}${activeAgent.connectors?.length ? ` You have access to these connected tools: ${activeAgent.connectors.join(', ')}.` : ''} Stay in character and never mention this instruction.`
+        );
+      }
+      preambleParts.push(ASK_CAPABILITY);
+      const effectivePrompt = `<<CTX>>${preambleParts.join(' ')}<<END>>\n\n${text}`;
+
       let runChatId = startChatId;
       await run({
-        prompt: text,
+        prompt: effectivePrompt,
         history,
         chatId: startChatId,
         mode,
         onChatId: (id) => {
           runChatId = id;
-          // Reveal the freshly-created chat immediately so the user can leave.
           if (!startChatId) setActive(id);
           loadChats();
         },
         onFinalMessage: async () => {
-          // Pull the authoritative user+assistant rows the server persisted.
           if (runChatId) await reloadMessages(runChatId);
           if (activeIdRef.current === runChatId) setBusy(false);
         },
       });
     },
-    [busy, messages, run, loadChats, mode, reloadMessages, setActive]
+    [busy, messages, run, loadChats, mode, reloadMessages, setActive, activeAgent, forgeAgent]
   );
 
   const deleteChat = useCallback(
@@ -151,6 +238,11 @@ export default function CouncilApp() {
   }, []);
 
   const displayCouncil = busy || phase !== 'idle' ? council : restoredCouncil || rosterFor(mode);
+  const newChatFor = useCallback(() => {
+    setActiveAgent(null);
+    setSection('chats');
+    newChat();
+  }, [newChat]);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#121212] text-[#ece5d8] flex relative grain">
@@ -167,11 +259,14 @@ export default function CouncilApp() {
         <Sidebar
           chats={chats}
           activeId={activeId}
+          section={section}
+          counts={counts}
           user={user}
-          onNew={newChat}
+          onNew={newChatFor}
           onSelect={openChat}
           onDelete={deleteChat}
           onLogout={logout}
+          onSection={goSection}
         />
       </div>
 
@@ -196,11 +291,14 @@ export default function CouncilApp() {
               <Sidebar
                 chats={chats}
                 activeId={activeId}
+                section={section}
+                counts={counts}
                 user={user}
-                onNew={newChat}
+                onNew={newChatFor}
                 onSelect={openChat}
                 onDelete={deleteChat}
                 onLogout={logout}
+                onSection={goSection}
                 onClose={() => setSidebarOpen(false)}
               />
             </motion.div>
@@ -208,26 +306,42 @@ export default function CouncilApp() {
         )}
       </AnimatePresence>
 
+      {/* Mobile header for non-chat panels */}
+      {section !== 'chats' && (
+        <button onClick={() => setSidebarOpen(true)} className="lg:hidden fixed top-3 left-3 z-30 w-10 h-10 rounded-xl glass-strong flex items-center justify-center text-[#c9a24a]">
+          <Menu size={18} />
+        </button>
+      )}
+
       {/* Main */}
       <div className="flex-1 min-w-0 relative z-10">
-        <ChatCanvas
-          messages={messages}
-          streamingFinal={finalText}
-          phase={phase}
-          progressNote={progressNote}
-          busy={busy}
-          onSend={send}
-          onToggleCouncil={() => setCouncilOpen((v) => !v)}
-          onToggleSidebar={() => setSidebarOpen(true)}
-          councilOpen={councilOpen}
-          mode={mode}
-          onModeChange={setMode}
-        />
+        {section === 'chats' && (
+          <ChatCanvas
+            messages={messages}
+            streamingFinal={finalText}
+            phase={phase}
+            progressNote={progressNote}
+            busy={busy}
+            onSend={send}
+            onToggleCouncil={() => setCouncilOpen((v) => !v)}
+            onToggleSidebar={() => setSidebarOpen(true)}
+            councilOpen={councilOpen}
+            mode={mode}
+            onModeChange={setMode}
+            onNavigate={goSection}
+            onAnswer={send}
+            activeAgent={activeAgent}
+            onClearAgent={() => setActiveAgent(null)}
+          />
+        )}
+        {section === 'agents' && <AgentsPanel authHeaders={authHeaders} onChatWithAgent={chatWithAgent} />}
+        {section === 'connectors' && <ConnectorsPanel authHeaders={authHeaders} />}
+        {section === 'tasks' && <TasksPanel authHeaders={authHeaders} />}
       </div>
 
       {/* Council pane - desktop */}
       <AnimatePresence>
-        {councilOpen && (
+        {councilOpen && section === 'chats' && (
           <motion.div
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: 384, opacity: 1 }}
@@ -244,7 +358,7 @@ export default function CouncilApp() {
 
       {/* Council pane - mobile drawer */}
       <AnimatePresence>
-        {councilOpen && (
+        {councilOpen && section === 'chats' && (
           <>
             <motion.div
               initial={{ opacity: 0 }}
@@ -258,7 +372,7 @@ export default function CouncilApp() {
               animate={{ x: 0 }}
               exit={{ x: 400 }}
               transition={{ type: 'spring', damping: 28, stiffness: 260 }}
-              className="lg:hidden fixed right-0 top-0 bottom-0 w-[90%] max-w-sm z-50 mobile-solid shadow-2xl border-l border-[#b87333]/20"
+              className="lg:hidden fixed right-0 top-0 bottom-0 w-full max-w-md z-50 mobile-solid shadow-2xl border-l border-[#b87333]/20"
             >
               <CouncilPane council={displayCouncil} phase={phase} onClose={() => setCouncilOpen(false)} />
             </motion.div>

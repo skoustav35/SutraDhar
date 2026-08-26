@@ -1,10 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowUp, Check, Copy, PanelRightOpen, Loader2, Menu, Cpu, GitCompareArrows, Gavel, Sigma, Zap, Users, Crown } from 'lucide-react';
-import type { ChatMessage, Phase, Mode } from '../lib/types';
-import { MODES } from '../lib/types';
+import { ArrowUp, Check, Copy, PanelRightOpen, Loader2, Menu, Cpu, GitCompareArrows, Sparkles, Sigma, FlaskConical, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import type { ChatMessage, Phase, Mode, NavSection, Agent } from '../lib/types';
 import Markdown from './Markdown';
 import Mandala from './Mandala';
+import ModelSelector from './ModelSelector';
+import GuideCards from './GuideCards';
+import AskCard, { type AskSpec } from './AskCard';
+
+// Parse [[ASK]]{...json...}[[/ASK]] blocks out of assistant content.
+export function parseAsk(content: string): { text: string; ask: AskSpec | null } {
+  const m = content.match(/\[\[ASK\]\]([\s\S]*?)\[\[\/ASK\]\]/);
+  if (!m) return { text: content, ask: null };
+  let ask: AskSpec | null = null;
+  try {
+    ask = JSON.parse(m[1].trim());
+  } catch { ask = null; }
+  const text = content.replace(m[0], '').trim();
+  return { text, ask };
+}
 
 interface Props {
   messages: ChatMessage[];
@@ -18,22 +33,20 @@ interface Props {
   councilOpen: boolean;
   mode: Mode;
   onModeChange: (m: Mode) => void;
+  onNavigate: (s: NavSection) => void;
+  onAnswer: (a: string) => void;
+  activeAgent: Agent | null;
+  onClearAgent: () => void;
 }
 
 const PHASE_META: Record<Phase, { label: string; icon: React.ReactNode }> = {
   idle: { label: 'Idle', icon: null },
-  answering: { label: 'Oracle answering', icon: <Zap size={13} /> },
-  solving: { label: 'Solving independently', icon: <Cpu size={13} /> },
-  'cross-checking': { label: 'Cross-checking answers', icon: <GitCompareArrows size={13} /> },
-  judging: { label: 'Judge deliberating', icon: <Gavel size={13} /> },
+  answering: { label: 'Reasoning', icon: <Cpu size={13} /> },
+  solving: { label: 'Reasoning', icon: <Cpu size={13} /> },
+  'cross-checking': { label: 'Self-verifying', icon: <GitCompareArrows size={13} /> },
+  judging: { label: 'Synthesizing', icon: <Sparkles size={13} /> },
   done: { label: 'Complete', icon: <Check size={13} /> },
   error: { label: 'Disrupted', icon: null },
-};
-
-const MODE_ICON: Record<Mode, React.ReactNode> = {
-  direct: <Zap size={14} />,
-  trio: <Users size={14} />,
-  council: <Crown size={14} />,
 };
 
 function AssistantMessage({ content }: { content: string }) {
@@ -50,8 +63,8 @@ function AssistantMessage({ content }: { content: string }) {
           S
         </div>
         <div>
-          <span className="font-display text-lg text-[#9a5a12] dark:text-[#ffd89b] leading-none">Sutradhar</span>
-          <div className="text-[10px] tracking-[0.2em] uppercase text-[#7a6746] dark:text-[#a99a7c] mt-0.5">Chief Justice · Final Verdict</div>
+          <span className="font-display text-lg text-[#9a5a12] dark:text-[#ffd89b] leading-none">Sutradhar 6.7</span>
+          <div className="text-[10px] tracking-[0.2em] uppercase text-[#7a6746] dark:text-[#a99a7c] mt-0.5">Final Answer</div>
         </div>
       </div>
       <div className="pl-11 relative">
@@ -85,6 +98,10 @@ export default function ChatCanvas({
   councilOpen,
   mode,
   onModeChange,
+  onNavigate,
+  onAnswer,
+  activeAgent,
+  onClearAgent,
 }: Props) {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -103,50 +120,58 @@ export default function ChatCanvas({
   };
 
   const empty = messages.length === 0 && !busy;
-  const suggestions = [
-    'Find all integer solutions to x² + y² = 2024',
-    'Evaluate the integral of x³/(eˣ−1) from 0 to ∞, with steps',
-    'Prove that √2 + √3 is irrational',
-  ];
-
   return (
     <div className="h-full flex flex-col relative">
       {/* header */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-[#b87333]/15 glass-strong relative z-20">
-        <div className="flex items-center gap-3">
-          <button onClick={onToggleSidebar} className="lg:hidden w-9 h-9 rounded-lg flex items-center justify-center text-[#c9a24a] hover:bg-[#b87333]/10">
+      <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-[#b87333]/15 glass-strong relative z-30">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <button onClick={onToggleSidebar} className="lg:hidden w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-[#c9a24a] hover:bg-[#b87333]/10">
             <Menu size={18} />
           </button>
-          <div>
-            <h1 className="font-display text-xl text-gradient-gold leading-none">The Council</h1>
-            <p className="text-[10px] tracking-[0.28em] uppercase text-[#a99a7c] mt-0.5">Multi-Agent Math Reasoning</p>
+          <div className="hidden md:block shrink-0">
+            <h1 className="font-display text-xl text-gradient-gold leading-none">Sutradhar</h1>
+            <p className="text-[10px] tracking-[0.28em] uppercase text-[#a99a7c] mt-0.5">Deep Reasoning</p>
           </div>
+          <div className="hidden md:block h-8 w-px bg-[#b87333]/20 mx-1" />
+          <ModelSelector mode={mode} onModeChange={onModeChange} disabled={busy} />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <AnimatePresence>
             {busy && phase !== 'idle' && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#ff9933]/12 border border-[#ff9933]/30 text-[12px] text-[#ffd89b]"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full bg-[#ff9933]/12 border border-[#ff9933]/30 text-[12px] text-[#ffd89b]"
               >
                 {PHASE_META[phase].icon}
                 <span className="hidden sm:inline">{PHASE_META[phase].label}</span>
               </motion.div>
             )}
           </AnimatePresence>
+          <Link to="/research" className="research-chip hidden sm:inline-flex" title="Read the Sutradhar architecture">
+            <FlaskConical size={14} /> Research
+          </Link>
           {!councilOpen && (
             <button
               onClick={onToggleCouncil}
-              className="flex items-center gap-2 px-3.5 py-2 rounded-xl glass text-[13px] text-[#c9a24a] hover:text-[#ff9933] hover:border-[#ff9933]/30 transition-colors"
+              className="flex items-center gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl glass text-[13px] text-[#c9a24a] hover:text-[#ff9933] hover:border-[#ff9933]/30 transition-colors"
             >
               <PanelRightOpen size={15} />
-              <span className="hidden sm:inline">Council Chamber</span>
+              <span className="hidden sm:inline">Reasoning Engine</span>
             </button>
           )}
         </div>
       </div>
+
+      {/* active agent banner */}
+      {activeAgent && (
+        <div className="agent-banner flex items-center gap-2.5 px-4 sm:px-6 py-2 relative z-20">
+          <span className="w-6 h-6 rounded-md flex items-center justify-center text-sm shrink-0" style={{ background: `${activeAgent.color}26`, border: `1px solid ${activeAgent.color}55` }}>{activeAgent.emoji}</span>
+          <span className="text-[13px] text-[#6a4310] dark:text-[#ffd89b]">Chatting with <span className="font-semibold">{activeAgent.name}</span></span>
+          <button onClick={onClearAgent} className="ml-auto text-[#8a7d60] hover:text-[#ff9933] flex items-center gap-1 text-[12px]"><X size={13} /> Exit agent</button>
+        </div>
+      )}
 
       {/* messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -168,54 +193,54 @@ export default function ChatCanvas({
                   <Sigma size={26} className="text-[#ffd89b]" />
                 </div>
               </div>
-              <h2 className="font-display text-3xl sm:text-4xl text-gradient-gold mb-2">The Council Awaits</h2>
+              <h2 className="font-display text-3xl sm:text-4xl text-gradient-gold mb-2">{activeAgent ? `Chat with ${activeAgent.name}` : 'Ask Sutradhar'}</h2>
               <p className="text-[#a99a7c] max-w-md">
-                Pose a hard problem. Three scholars solve it independently, cross-check each other, and the Chief Justice
-                judges every answer to deliver the definitive solution.
+                {activeAgent
+                  ? activeAgent.description || 'Your specialized agent is ready. Ask it anything.'
+                  : 'Pose a question or task. Sutradhar reasons deeply, verifies its own work, and converges to one clear answer.'}
               </p>
 
               <div className="mt-6 flex items-center gap-2 text-[11px] text-[#8a7d60]">
-                <span className="flex items-center gap-1"><Cpu size={12} /> Solve</span>
+                <span className="flex items-center gap-1"><Cpu size={12} /> Reason</span>
                 <span className="text-[#b87333]/40">→</span>
-                <span className="flex items-center gap-1"><GitCompareArrows size={12} /> Cross-check</span>
+                <span className="flex items-center gap-1"><GitCompareArrows size={12} /> Verify</span>
                 <span className="text-[#b87333]/40">→</span>
-                <span className="flex items-center gap-1"><Gavel size={12} /> Judge</span>
+                <span className="flex items-center gap-1"><Sparkles size={12} /> Synthesize</span>
               </div>
 
-              <div className="mt-8 grid sm:grid-cols-3 gap-2.5 w-full max-w-2xl">
-                {suggestions.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => onSend(s)}
-                    className="glass rounded-xl p-3 text-left text-[13px] text-[#c9bfa8] hover:text-[#ffd89b] hover:border-[#ff9933]/30 transition-colors"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
+              {!activeAgent && <GuideCards onNavigate={onNavigate} />}
             </motion.div>
           )}
 
           <AnimatePresence initial={false}>
-            {messages.map((m) => (
-              <motion.div key={m.id} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
-                {m.role === 'user' ? (
-                  <div className="flex justify-end">
-                    <div className="max-w-[85%] rounded-2xl rounded-tr-sm px-4 py-3 bg-gradient-to-br from-[#2a2118] to-[#1f1811] border border-[#b87333]/25 text-[#ece5d8]">
-                      {m.content}
+            {messages.map((m, idx) => {
+              const isLast = idx === messages.length - 1;
+              const parsed = m.role === 'assistant' ? parseAsk(m.content) : { text: m.content, ask: null };
+              return (
+                <motion.div key={m.id} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+                  {m.role === 'user' ? (
+                    <div className="flex justify-end">
+                      <div className="max-w-[85%] rounded-2xl rounded-tr-sm px-4 py-3 bg-gradient-to-br from-[#2a2118] to-[#1f1811] border border-[#b87333]/25 text-[#ece5d8]">
+                        {m.content}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <AssistantMessage content={m.content} />
-                )}
-              </motion.div>
-            ))}
+                  ) : (
+                    <>
+                      {parsed.text && <AssistantMessage content={parsed.text} />}
+                      {parsed.ask && (
+                        <AskCard spec={parsed.ask} onAnswer={onAnswer} disabled={busy || !isLast} />
+                      )}
+                    </>
+                  )}
+                </motion.div>
+              );
+            })}
           </AnimatePresence>
 
           {busy && (
             <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}>
               {streamingFinal ? (
-                <AssistantMessage content={streamingFinal} />
+                <AssistantMessage content={parseAsk(streamingFinal).text || streamingFinal} />
               ) : (
                 <div className="glass rounded-2xl p-5">
                   <div className="flex items-center gap-3 text-[#9a5a12] dark:text-[#ffd89b] mb-3">
@@ -237,7 +262,7 @@ export default function ChatCanvas({
                     <div className="h-3 rounded shimmer w-2/3" />
                   </div>
                   <p className="text-[11px] text-[#877552] dark:text-[#8a7d60] mt-3">
-                    Hard problems can take a few minutes — the scholars are thinking deeply. Watch the Council Chamber for live reasoning.
+                    Hard problems can take a few minutes — Sutradhar is thinking deeply. Open the Reasoning Engine to watch it work.
                   </p>
                 </div>
               )}
@@ -249,36 +274,6 @@ export default function ChatCanvas({
       {/* composer */}
       <div className="px-4 sm:px-6 pb-5 pt-2">
         <div className="max-w-3xl mx-auto">
-          {/* mode selector */}
-          <div className="mb-2.5 flex flex-wrap items-stretch gap-2">
-            {(Object.keys(MODES) as Mode[]).map((k) => {
-              const cfg = MODES[k];
-              const activeMode = mode === k;
-              return (
-                <button
-                  key={k}
-                  onClick={() => onModeChange(k)}
-                  disabled={busy}
-                  title={cfg.desc}
-                  className={`group flex-1 min-w-[100px] flex items-center gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-2 rounded-xl border text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                    activeMode
-                      ? 'border-[#ff9933]/50 bg-[#ff9933]/10 saffron-glow'
-                      : 'border-[#b87333]/20 glass hover:border-[#ff9933]/30'
-                  }`}
-                >
-                  <span className={`shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center ${activeMode ? 'bg-[#ff9933]/20 text-[#ff9933]' : 'bg-[#b87333]/10 text-[#c9a24a]'}`}>
-                    {MODE_ICON[k]}
-                  </span>
-                  <span className="min-w-0">
-                    <span className={`block text-[12px] sm:text-[13px] font-medium leading-tight truncate ${activeMode ? 'text-[#ffd89b]' : 'text-[#c9bfa8]'}`}>{cfg.label}</span>
-                    <span className="block text-[10px] text-[#8a7d60] leading-tight mt-0.5">
-                      {k === 'direct' ? '1 core' : k === 'trio' ? '3 cores + adjudicator' : '5 cores + adjudicator'}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
           <div className="glass-strong rounded-2xl p-2 flex items-end gap-2 focus-within:border-[#ff9933]/40 transition-colors">
             <textarea
               ref={taRef}
@@ -295,7 +290,7 @@ export default function ChatCanvas({
                 }
               }}
               rows={1}
-              placeholder="Pose a hard problem to the council…"
+              placeholder="Ask Sutradhar anything…"
               disabled={busy}
               className="flex-1 resize-none bg-transparent px-3 py-2.5 text-[15px] text-[#ece5d8] placeholder:text-[#7d7259] focus:outline-none max-h-[200px]"
             />
@@ -308,7 +303,7 @@ export default function ChatCanvas({
             </button>
           </div>
           <p className="text-center text-[10px] text-[#6b6250] mt-2 tracking-wide">
-            The council solves independently, cross-checks, then judges. Verify important results.
+            Sutradhar reasons deeply, verifies its own work, then answers. Verify important results.
           </p>
         </div>
       </div>

@@ -1,0 +1,108 @@
+import supabase from './db-client.js';
+
+async function getUser(req) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return null;
+  try {
+    const { data } = await supabase.auth.getUser(token);
+    return data?.user || null;
+  } catch {
+    return null;
+  }
+}
+
+function computeNextRun(cadence, runTime) {
+  const [hh, mm] = String(runTime || '09:00').split(':').map((x) => parseInt(x, 10) || 0);
+  const now = new Date();
+  const next = new Date();
+  next.setHours(hh, mm, 0, 0);
+  if (cadence === 'hourly') {
+    next.setTime(now.getTime() + 60 * 60 * 1000);
+  } else if (cadence === 'weekly') {
+    if (next <= now) next.setDate(next.getDate() + 7);
+  } else if (cadence === 'monthly') {
+    if (next <= now) next.setMonth(next.getMonth() + 1);
+  } else {
+    // daily / once
+    if (next <= now) next.setDate(next.getDate() + 1);
+  }
+  return next.toISOString();
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+
+  const user = await getUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    if (req.method === 'GET') {
+      const { data, error } = await supabase
+        .from('scheduled_tasks')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return res.status(200).json(data);
+    }
+
+    if (req.method === 'POST') {
+      const { title, prompt, cadence, run_time, agent_id } = req.body || {};
+      if (!title) return res.status(400).json({ error: 'title required' });
+      const next_run = computeNextRun(cadence, run_time);
+      const { data, error } = await supabase
+        .from('scheduled_tasks')
+        .insert({
+          user_id: user.id,
+          agent_id: agent_id || null,
+          title: String(title).slice(0, 120),
+          prompt: (prompt || '').slice(0, 4000),
+          cadence: cadence || 'daily',
+          run_time: run_time || '09:00',
+          next_run,
+          enabled: true,
+          status: 'idle',
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      return res.status(201).json(data);
+    }
+
+    if (req.method === 'PUT') {
+      const { id, ...fields } = req.body || {};
+      if (!id) return res.status(400).json({ error: 'Missing id' });
+      const patch = {};
+      for (const k of ['title', 'prompt', 'cadence', 'run_time', 'enabled', 'agent_id', 'status', 'last_run']) {
+        if (k in fields) patch[k] = fields[k];
+      }
+      if ('cadence' in patch || 'run_time' in patch) {
+        patch.next_run = computeNextRun(patch.cadence || fields.cadence, patch.run_time || fields.run_time);
+      }
+      const { data, error } = await supabase
+        .from('scheduled_tasks')
+        .update(patch)
+        .eq('id', id)
+        .eq('user_id', user.id)
+        .select()
+        .single();
+      if (error) throw error;
+      return res.status(200).json(data);
+    }
+
+    if (req.method === 'DELETE') {
+      const { id } = req.body || {};
+      const { error } = await supabase.from('scheduled_tasks').delete().eq('id', id).eq('user_id', user.id);
+      if (error) throw error;
+      return res.status(200).json({ ok: true });
+    }
+
+    res.status(405).json({ error: 'Method not allowed' });
+  } catch (err) {
+    console.error('tasks error', err);
+    res.status(500).json({ error: err.message });
+  }
+}

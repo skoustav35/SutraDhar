@@ -7,7 +7,6 @@ import Landing from './pages/Landing';
 import CouncilApp from './pages/CouncilApp';
 import ApiPage from './pages/ApiPage';
 import Research from './pages/Research';
-import AuthCallback from './pages/AuthCallback';
 
 function RootGate() {
   const { user, loading } = useAuth();
@@ -24,7 +23,6 @@ export default function App() {
         <AnimatePresence mode="wait">
           <Routes>
             <Route path="/" element={<RootGate />} />
-            <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/research" element={<Research />} />
             <Route
               path="/app"
