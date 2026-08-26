@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowUp, Check, Copy, PanelRightOpen, Loader2, Menu, Cpu, GitCompareArrows, Sparkles, Sigma, FlaskConical, X } from 'lucide-react';
+import { ArrowUp, Check, Copy, PanelRightOpen, Loader2, Menu, Cpu, GitCompareArrows, Sparkles, Sigma, FlaskConical, X, Plug } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { ChatMessage, Phase, Mode, NavSection, Agent } from '../lib/types';
+import type { ChatMessage, Phase, Mode, Agent } from '../lib/types';
 import Markdown from './Markdown';
 import Mandala from './Mandala';
 import ModelSelector from './ModelSelector';
-import GuideCards from './GuideCards';
 import AskCard, { type AskSpec } from './AskCard';
 
 // Parse [[ASK]]{...json...}[[/ASK]] blocks out of assistant content.
@@ -33,7 +32,6 @@ interface Props {
   councilOpen: boolean;
   mode: Mode;
   onModeChange: (m: Mode) => void;
-  onNavigate: (s: NavSection) => void;
   onAnswer: (a: string) => void;
   activeAgent: Agent | null;
   onClearAgent: () => void;
@@ -41,6 +39,7 @@ interface Props {
 
 const PHASE_META: Record<Phase, { label: string; icon: React.ReactNode }> = {
   idle: { label: 'Idle', icon: null },
+  tools: { label: 'Using tools', icon: <Plug size={13} /> },
   answering: { label: 'Reasoning', icon: <Cpu size={13} /> },
   solving: { label: 'Reasoning', icon: <Cpu size={13} /> },
   'cross-checking': { label: 'Self-verifying', icon: <GitCompareArrows size={13} /> },
@@ -98,7 +97,6 @@ export default function ChatCanvas({
   councilOpen,
   mode,
   onModeChange,
-  onNavigate,
   onAnswer,
   activeAgent,
   onClearAgent,
@@ -123,9 +121,13 @@ export default function ChatCanvas({
   return (
     <div className="h-full flex flex-col relative">
       {/* header */}
-      <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-[#b87333]/15 glass-strong relative z-30">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <button onClick={onToggleSidebar} className="lg:hidden w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-[#c9a24a] hover:bg-[#b87333]/10">
+      <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-6 py-2.5 sm:py-3 border-b border-[#b87333]/15 glass-strong relative z-30">
+        <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
+          <button
+            onClick={onToggleSidebar}
+            aria-label="Open menu"
+            className="lg:hidden w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-[#c9a24a] hover:bg-[#b87333]/10"
+          >
             <Menu size={18} />
           </button>
           <div className="hidden md:block shrink-0">
@@ -133,31 +135,40 @@ export default function ChatCanvas({
             <p className="text-[10px] tracking-[0.28em] uppercase text-[#a99a7c] mt-0.5">Deep Reasoning</p>
           </div>
           <div className="hidden md:block h-8 w-px bg-[#b87333]/20 mx-1" />
-          <ModelSelector mode={mode} onModeChange={onModeChange} disabled={busy} />
+          <div className="min-w-0">
+            <ModelSelector mode={mode} onModeChange={onModeChange} disabled={busy} />
+          </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <AnimatePresence>
             {busy && phase !== 'idle' && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full bg-[#ff9933]/12 border border-[#ff9933]/30 text-[12px] text-[#ffd89b]"
+                className="flex items-center justify-center gap-1.5 w-9 h-9 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full bg-[#ff9933]/12 border border-[#ff9933]/30 text-[12px] text-[#ffd89b]"
+                title={PHASE_META[phase].label}
               >
                 {PHASE_META[phase].icon}
                 <span className="hidden sm:inline">{PHASE_META[phase].label}</span>
               </motion.div>
             )}
           </AnimatePresence>
-          <Link to="/research" className="research-chip hidden sm:inline-flex" title="Read the Sutradhar architecture">
-            <FlaskConical size={14} /> Research
+
+          {/* Compact, icon-only research shortcut — no caption, no overlap on mobile */}
+          <Link to="/research" className="research-chip" aria-label="Research" title="Sutradhar research & architecture">
+            <FlaskConical size={16} />
           </Link>
+
           {!councilOpen && (
             <button
               onClick={onToggleCouncil}
-              className="flex items-center gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl glass text-[13px] text-[#c9a24a] hover:text-[#ff9933] hover:border-[#ff9933]/30 transition-colors"
+              aria-label="Open reasoning engine"
+              title="Reasoning Engine"
+              className="flex items-center justify-center gap-2 w-9 h-9 sm:w-auto sm:h-auto sm:px-3.5 sm:py-2 rounded-xl glass text-[13px] text-[#c9a24a] hover:text-[#ff9933] hover:border-[#ff9933]/30 transition-colors"
             >
-              <PanelRightOpen size={15} />
+              <PanelRightOpen size={16} />
               <span className="hidden sm:inline">Reasoning Engine</span>
             </button>
           )}
@@ -181,34 +192,26 @@ export default function ChatCanvas({
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7 }}
-              className="min-h-[58vh] flex flex-col items-center justify-center text-center"
+              className="min-h-[62vh] flex flex-col items-center justify-center text-center"
             >
-              <div className="relative mb-6">
+              <div className="relative mb-8">
                 <div className="absolute inset-0 blur-3xl rounded-full bg-[#ff9933]/15 animate-breathe" />
-                <Mandala className="w-32 h-32 animate-spin-slow opacity-70 relative" color="#ff9933" />
+                <Mandala className="w-40 h-40 sm:w-52 sm:h-52 animate-spin-slow opacity-70 relative" color="#ff9933" />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <Mandala className="w-16 h-16 animate-spin-slow-rev opacity-90" color="#c9a24a" />
+                  <Mandala className="w-20 h-20 sm:w-26 sm:h-26 animate-spin-slow-rev opacity-90" color="#c9a24a" />
                 </div>
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <Sigma size={26} className="text-[#ffd89b]" />
+                  <Sigma size={30} className="text-[#ffd89b]" />
                 </div>
               </div>
-              <h2 className="font-display text-3xl sm:text-4xl text-gradient-gold mb-2">{activeAgent ? `Chat with ${activeAgent.name}` : 'Ask Sutradhar'}</h2>
-              <p className="text-[#a99a7c] max-w-md">
+              <h2 className="font-display text-3xl sm:text-4xl text-gradient-gold mb-2">
+                {activeAgent ? `Chat with ${activeAgent.name}` : 'Ask Sutradhar'}
+              </h2>
+              <p className="text-[#a99a7c] max-w-md text-[15px] leading-relaxed">
                 {activeAgent
                   ? activeAgent.description || 'Your specialized agent is ready. Ask it anything.'
                   : 'Pose a question or task. Sutradhar reasons deeply, verifies its own work, and converges to one clear answer.'}
               </p>
-
-              <div className="mt-6 flex items-center gap-2 text-[11px] text-[#8a7d60]">
-                <span className="flex items-center gap-1"><Cpu size={12} /> Reason</span>
-                <span className="text-[#b87333]/40">→</span>
-                <span className="flex items-center gap-1"><GitCompareArrows size={12} /> Verify</span>
-                <span className="text-[#b87333]/40">→</span>
-                <span className="flex items-center gap-1"><Sparkles size={12} /> Synthesize</span>
-              </div>
-
-              {!activeAgent && <GuideCards onNavigate={onNavigate} />}
             </motion.div>
           )}
 

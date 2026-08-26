@@ -57,8 +57,10 @@ export default function ModelSelector({
           {MODE_ICON[mode]}
         </span>
         <span className="min-w-0 text-left leading-tight">
-          <span className="model-trigger-label block text-[13px] font-semibold truncate max-w-[9rem] sm:max-w-[12rem]">
-            {active.label}
+          {/* Compact on phones (Lite / Ultra / Extreme), full name from sm up. */}
+          <span className="model-trigger-label block text-[13px] font-semibold truncate max-w-[5.5rem] sm:max-w-[12rem]">
+            <span className="sm:hidden">{active.short}</span>
+            <span className="hidden sm:inline">{active.label}</span>
           </span>
           <span className="model-trigger-tier hidden sm:block text-[10px] uppercase tracking-[0.15em]">{TIER[mode]}</span>
         </span>

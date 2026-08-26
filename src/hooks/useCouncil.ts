@@ -7,6 +7,8 @@ interface RunArgs {
   history: { role: string; content: string }[];
   chatId: string | null;
   mode: Mode;
+  /** Restrict live tool use to this agent's connectors (null = all connected). */
+  agentConnectors?: string[] | null;
   onFinalMessage: (msg: ChatMessage) => void;
   onChatId: (id: string) => void;
 }
@@ -32,6 +34,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 }
 
 const PHASE_FROM_STATUS: Record<string, Phase> = {
+  tools: 'tools',
   solving: 'solving',
   answering: 'answering',
   'cross-checking': 'cross-checking',
@@ -133,13 +136,13 @@ export function useCouncil() {
     }
   }, [applyStatus, pollRun]);
 
-  const run = useCallback(async ({ prompt, history, chatId, mode, onFinalMessage, onChatId }: RunArgs) => {
+  const run = useCallback(async ({ prompt, history, chatId, mode, agentConnectors = null, onFinalMessage, onChatId }: RunArgs) => {
     stoppedRef.current = false;
     setCouncil(rosterFor(mode));
     setFinalText('');
     setError(null);
     setPhase(mode === 'direct' ? 'answering' : 'solving');
-    setProgressNote('Convening the council…');
+    setProgressNote('Preparing Sutradhar…');
 
     let kickoff: { chatId: string; runId: string; title?: string };
     try {
@@ -147,7 +150,7 @@ export function useCouncil() {
       const res = await fetch('/api/run', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ prompt, mode, chatId, history }),
+        body: JSON.stringify({ prompt, mode, chatId, history, agentConnectors }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));

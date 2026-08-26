@@ -356,16 +356,17 @@ export default function Landing() {
           <p className="text-[12px] tracking-[0.3em] uppercase text-[#c9a24a] mb-3">The Sutradhar 6.7 Family</p>
           <h2 className="font-display text-4xl sm:text-5xl text-gradient-gold">Choose Your Model</h2>
           <p className="text-[#a99a7c] max-w-xl mx-auto mt-4">
-            Three distinct large language models spanning efficient to frontier capability — each exceptionally
-            designed for deep, accurate reasoning. <Link to="/research" className="text-[#ff9933] hover:underline">Learn more →</Link>
+            Three standalone sparse Mixture-of-Experts models of <span className="text-[#ffd89b]">3.8, 6.7 and 8.7 trillion parameters</span> —
+            each jointly trained end to end for deep, verifiable reasoning.{' '}
+            <Link to="/research" className="text-[#ff9933] hover:underline">Read the technical report →</Link>
           </p>
         </div>
 
         <div className="grid sm:grid-cols-3 gap-4 mb-14">
           {[
-            { icon: <Zap size={22} />, name: 'Sutradhar 6.7 Lite', tag: 'sutradhar-6.7-lite', d: 'A fast, efficient large language model for everyday questions and general reasoning.' },
-            { icon: <Users size={22} />, name: 'Sutradhar 6.7 Ultra', tag: 'sutradhar-6.7-ultra', d: 'Our flagship model — deep, high-accuracy reasoning with self-verification for hard problems.' },
-            { icon: <Crown size={22} />, name: 'Sutradhar 6.7 Extreme', tag: 'sutradhar-6.7-extreme', d: 'Our most capable model — maximum reasoning depth for the very hardest challenges.' },
+            { icon: <Zap size={22} />, name: 'Sutradhar 6.7 Lite', tag: 'sutradhar-6.7-lite', d: '3.8T parameters, 118B active. Frontier-adjacent quality at sub-second time-to-first-token.' },
+            { icon: <Users size={22} />, name: 'Sutradhar 6.7 Ultra', tag: 'sutradhar-6.7-ultra', d: '6.7T parameters, 285B active. Our flagship, with a tri-stream self-verifying reasoning core.' },
+            { icon: <Crown size={22} />, name: 'Sutradhar 6.7 Extreme', tag: 'sutradhar-6.7-extreme', d: '8.7T parameters, 494B active. Five reasoning streams with full cross-examination.' },
           ].map((m, i) => (
             <motion.div
               key={m.name}

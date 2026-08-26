@@ -1,5 +1,6 @@
 import supabase from './db-client.js';
 import { GATEWAY, API_KEY, JUDGE_MODEL } from './_llm.js';
+import { PROVIDERS } from './_providers.js';
 
 export const config = { maxDuration: 120 };
 
@@ -67,7 +68,10 @@ export default async function handler(req, res) {
       description: String(spec.description || '').slice(0, 500),
       system_prompt: String(spec.system_prompt || '').slice(0, 6000),
       skills: Array.isArray(spec.skills) ? spec.skills.slice(0, 10) : [],
-      connectors: Array.isArray(spec.connectors) ? spec.connectors.slice(0, 12) : [],
+      // Only keep connector ids that exist in the real provider registry.
+      connectors: Array.isArray(spec.connectors)
+        ? spec.connectors.filter((c) => Object.prototype.hasOwnProperty.call(PROVIDERS, c)).slice(0, 12)
+        : [],
     };
 
     if (save) {

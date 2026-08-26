@@ -1,5 +1,6 @@
 import supabase from './db-client.js';
 import { runPipeline, MODE_CONFIGS, COUNCIL, JUDGE_MODEL, MODEL_NAMES, DIRECT_SYSTEM, streamCompletion, buildContext } from './_llm.js';
+import { gatherToolContext } from './_tools.js';
 
 export const config = { maxDuration: 800 };
 
@@ -51,7 +52,7 @@ async function getUser(req) {
 
 // The background job: runs the full pipeline and persists progress to `runs`,
 // then writes the final assistant message to `messages`.
-async function orchestrate({ runId, chatId, userId, prompt, mode, history }) {
+async function orchestrate({ runId, chatId, userId, prompt, mode, history, agentConnectors }) {
   const cfg = MODE_CONFIGS[mode] || MODE_CONFIGS.trio;
   const council = rosterFor(mode);
   const byModel = Object.fromEntries(council.map((c) => [c.model, c]));
@@ -59,6 +60,7 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history }) {
   let phase = cfg.synthesize ? 'solving' : 'answering';
   let note = cfg.synthesize ? `Sutradhar is reasoning across ${council.length} parallel streams…` : 'Sutradhar is reasoning…';
   let lastWrite = 0;
+  let toolResults = [];
 
   const flush = async (force = false) => {
     const now = Date.now();
@@ -115,7 +117,40 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history }) {
   };
 
   try {
-    const result = await runPipeline({ prompt, mode, history, onProgress });
+    // ---- Phase 0: real tool use across the user's connected accounts ----
+    let effectivePrompt = prompt;
+    try {
+      phase = 'tools';
+      note = 'Sutradhar is consulting your connected tools…';
+      await flush(true);
+      const gathered = await gatherToolContext({
+        userId,
+        prompt,
+        history,
+        restrictTo: agentConnectors,
+        onEvent: (ev) => {
+          if (ev.type === 'tool_start') note = `Calling ${ev.provider} · ${ev.label || ev.action}…`;
+          else if (ev.type === 'tool_done') note = `${ev.provider} responded — ${ev.summary || 'done'}`;
+          else if (ev.type === 'tool_error') note = `${ev.provider} failed — ${ev.error}`;
+          flush();
+        },
+      });
+      toolResults = (gathered.results || []).map((r) => ({
+        provider: r.provider,
+        action: r.action,
+        label: r.tool?.label || r.action,
+        ok: r.ok,
+        summary: r.ok ? r.result.summary : r.error,
+      }));
+      if (gathered.context) effectivePrompt = `${gathered.context}\n\n${prompt}`;
+    } catch {
+      /* tool use is best-effort; reasoning continues without it */
+    }
+    phase = cfg.synthesize ? 'solving' : 'answering';
+    note = cfg.synthesize ? `Sutradhar is reasoning across ${council.length} parallel streams…` : 'Sutradhar is reasoning…';
+    await flush(true);
+
+    const result = await runPipeline({ prompt: effectivePrompt, mode, history, onProgress });
     finalAcc = result.final || finalAcc;
 
     // Guaranteed-answer rescue if the pipeline produced nothing.
@@ -137,6 +172,15 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history }) {
       }
     }
     if (!finalAcc.trim()) finalAcc = 'The problem is exceptionally demanding and the models are momentarily unavailable. Please try again.';
+
+    // Record which live tools were actually called, so the provenance of the
+    // answer is visible and permanently stored with the message.
+    if (toolResults.length) {
+      const lines = toolResults
+        .map((t) => `- ${t.ok ? '✅' : '⚠️'} **${t.provider}** · ${t.label} — ${t.summary}`)
+        .join('\n');
+      finalAcc += `\n\n---\n\n**Live data used**\n\n${lines}`;
+    }
 
     // mark solvers complete
     council.forEach((c) => { if (c.status !== 'error') c.status = 'done'; });
@@ -170,7 +214,7 @@ export default async function handler(req, res) {
   const user = await getUser(req);
   if (!user) return res.status(401).json({ error: 'Sign in required to run the council.' });
 
-  const { prompt, mode = 'trio', chatId, history = [] } = req.body || {};
+  const { prompt, mode = 'trio', chatId, history = [], agentConnectors = null } = req.body || {};
   if (!prompt || typeof prompt !== 'string') return res.status(400).json({ error: 'Missing prompt' });
   const useMode = MODE_CONFIGS[mode] ? mode : 'trio';
 
@@ -203,7 +247,15 @@ export default async function handler(req, res) {
     res.status(200).json({ chatId: cid, runId: run.id, title: chatTitle });
 
     // 5) Run the pipeline in the background (survives the user leaving).
-    const job = orchestrate({ runId: run.id, chatId: cid, userId: user.id, prompt, mode: useMode, history });
+    const job = orchestrate({
+      runId: run.id,
+      chatId: cid,
+      userId: user.id,
+      prompt,
+      mode: useMode,
+      history,
+      agentConnectors: Array.isArray(agentConnectors) ? agentConnectors : null,
+    });
     if (waitUntil) waitUntil(job); else await job;
   } catch (err) {
     console.error('run kickoff error', err);

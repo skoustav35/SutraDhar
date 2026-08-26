@@ -206,6 +206,8 @@ export default function CouncilApp() {
         history,
         chatId: startChatId,
         mode,
+        // Agent chats may only reach the tools that agent was given.
+        agentConnectors: activeAgent?.connectors?.length ? activeAgent.connectors : null,
         onChatId: (id) => {
           runChatId = id;
           if (!startChatId) setActive(id);
@@ -328,7 +330,6 @@ export default function CouncilApp() {
             councilOpen={councilOpen}
             mode={mode}
             onModeChange={setMode}
-            onNavigate={goSection}
             onAnswer={send}
             activeAgent={activeAgent}
             onClearAgent={() => setActiveAgent(null)}
