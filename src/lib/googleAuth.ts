@@ -15,13 +15,9 @@ export function signInWithGoogle(_appName = 'The Council') {
     console.error('[google-auth] Firebase not configured');
     return;
   }
-  if (isMobile()) {
-    signInWithRedirect(auth, googleProvider);
-  } else {
-    signInWithPopup(auth, googleProvider).catch((error) => {
-      console.error('[google-auth] signInWithPopup failed:', error.message);
-    });
-  }
+  signInWithPopup(auth, googleProvider).catch((error) => {
+    console.error('[google-auth] signInWithPopup failed:', error.message);
+  });
 }
 
 export async function handleGoogleRedirect() {
