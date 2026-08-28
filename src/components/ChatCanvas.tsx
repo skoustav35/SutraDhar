@@ -243,7 +243,18 @@ export default function ChatCanvas({
           {busy && (
             <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}>
               {streamingFinal ? (
-                <AssistantMessage content={parseAsk(streamingFinal).text || streamingFinal} />
+                <>
+                  {(() => {
+                    const parsed = parseAsk(streamingFinal);
+                    return (
+                      <>
+                        {parsed.text && <AssistantMessage content={parsed.text} />}
+                        {parsed.ask && <div className="mt-4"><AskCard spec={parsed.ask} onAnswer={onAnswer} disabled={false} /></div>}
+                        {!parsed.text && !parsed.ask && <AssistantMessage content={streamingFinal} />}
+                      </>
+                    );
+                  })()}
+                </>
               ) : (
                 <div className="glass rounded-2xl p-5">
                   <div className="flex items-center gap-3 text-[#9a5a12] dark:text-[#ffd89b] mb-3">

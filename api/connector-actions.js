@@ -1,10 +1,21 @@
 // Execute real provider actions and read the execution log.
 //   GET  /api/connector-actions?log=1   → recent executions
 //   POST /api/connector-actions         → run an action against the live API
-import supabase from './db-client.js';
-import { cors, getUser, runAction, ProviderError } from './_connectors-runtime.js';
+import { adminDb, adminAuth } from './firebase-admin.js';
+import { cors, runAction, ProviderError } from './_connectors-runtime.js';
 
 export const config = { maxDuration: 60 };
+
+async function getUser(req) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return null;
+  try {
+    const decoded = await adminAuth.verifyIdToken(token);
+    return { uid: decoded.uid, email: decoded.email };
+  } catch {
+    return null;
+  }
+}
 
 export default async function handler(req, res) {
   cors(res);
@@ -16,15 +27,13 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
       const limit = Math.min(Number(req.query?.limit) || 25, 100);
-      let q = supabase
-        .from('connector_events')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
+      let query = adminDb.collection('connector_events')
+        .where('user_id', '==', user.uid)
+        .orderBy('created_at', 'desc')
         .limit(limit);
-      if (req.query?.provider) q = q.eq('provider', req.query.provider);
-      const { data, error } = await q;
-      if (error) throw error;
+      if (req.query?.provider) query = query.where('provider', '==', req.query.provider);
+      const snapshot = await query.get();
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       return res.status(200).json(data || []);
     }
 
@@ -32,7 +41,7 @@ export default async function handler(req, res) {
       const { provider, action, params } = req.body || {};
       if (!provider || !action) return res.status(400).json({ error: 'provider and action are required' });
       const result = await runAction({
-        userId: user.id,
+        userId: user.uid,
         provider,
         actionId: action,
         params: params && typeof params === 'object' ? params : {},

@@ -1,4 +1,4 @@
-import supabase from './db-client.js';
+import { adminDb, adminAuth } from './firebase-admin.js';
 
 // Poll endpoint for a run's live state. Query by ?runId=... or ?chatId=...
 // (chatId returns the most recent run for that chat).
@@ -12,22 +12,23 @@ export default async function handler(req, res) {
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   let userId = null;
   try {
-    const { data } = await supabase.auth.getUser(token);
-    userId = data?.user?.id || null;
+    const decoded = await adminAuth.verifyIdToken(token);
+    userId = decoded.uid;
   } catch { /* ignore */ }
   if (!userId) return res.status(401).json({ error: 'Invalid token' });
 
   const { runId, chatId } = req.query;
   try {
-    let query = supabase.from('runs').select('*').eq('user_id', userId);
-    if (runId) query = query.eq('id', runId);
-    else if (chatId) query = query.eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1);
-    else return res.status(400).json({ error: 'Provide runId or chatId' });
-
-    const { data, error } = await query;
-    if (error) throw error;
-    const run = Array.isArray(data) ? data[0] : data;
-    if (!run) return res.status(200).json({ found: false });
+    let run = null;
+    if (runId) {
+      const doc = await adminDb.collection('runs').doc(String(runId)).get();
+      if (!doc.exists || doc.data().user_id !== userId) return res.status(200).json({ found: false });
+      run = { id: doc.id, ...doc.data() };
+    } else if (chatId) {
+      const snapshot = await adminDb.collection('runs').where('user_id', '==', userId).where('chat_id', '==', chatId).orderBy('created_at', 'desc').limit(1).get();
+      if (snapshot.empty) return res.status(200).json({ found: false });
+      run = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+    } else return res.status(400).json({ error: 'Provide runId or chatId' });
 
     // Defensively strip any provider `model` key from council entries.
     const council = (run.council || []).map((c) => {

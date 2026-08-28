@@ -24,6 +24,25 @@ function relTime(iso: string | null) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function ConnectorLogo({ meta, size = 10, withBg = true }: { meta: any; size?: number; withBg?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (!meta?.logo || failed) {
+    return <span style={{ fontSize: size * 1.6 }}>{meta?.emoji || '🔌'}</span>;
+  }
+  const bg = withBg ? { background: 'white', border: `1px solid ${meta.color}22` } : {};
+  return (
+    <img
+      src={meta.logo}
+      alt={meta.name}
+      width={size}
+      height={size}
+      onError={() => setFailed(true)}
+      className="object-contain"
+      style={{ width: size, height: size, ...bg } as any}
+    />
+  );
+}
+
 /* ------------------------------------------------------------------ drawer */
 
 function ConnectDrawer({
@@ -124,10 +143,10 @@ function ConnectDrawer({
         <div className="p-5 sm:p-6">
           <div className="flex items-start gap-3 mb-5">
             <div
-              className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0"
-              style={{ background: `${meta?.color || '#b87333'}1e`, border: `1px solid ${meta?.color || '#b87333'}44` }}
+              className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 bg-white border shadow-sm"
+              style={{ borderColor: `${meta?.color || '#b87333'}22` }}
             >
-              {meta?.emoji || '🔌'}
+              <ConnectorLogo meta={meta} size={28} withBg={false} />
             </div>
             <div className="min-w-0 flex-1">
               <h2 className="font-display text-2xl text-[#6a4310] dark:text-[#ffd89b] leading-tight">{def.name}</h2>
@@ -159,57 +178,89 @@ function ConnectDrawer({
             </div>
           )}
 
-          {/* ---------------------------------------------------- OAuth path */}
-          {def.oauthAvailable && (
-            <div className="mb-5">
-              <div className="text-[10px] uppercase tracking-[0.24em] text-[#8a7350] dark:text-[#a99a7c] mb-2">
-                Option 1 · One-click OAuth
+          {/* ---------------------------------------------------- Browser Login (Luxury) */}
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#1e6e50]/20 to-[#1e6e50]/10 border border-[#1e6e50]/30 flex items-center justify-center">
+                <Zap size={16} className="text-[#1e6e50] dark:text-[#8fd4b4]" />
               </div>
-              {def.oauthReady ? (
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.2em] text-[#1e6e50] dark:text-[#8fd4b4] font-medium">Recommended</div>
+                <div className="text-[13px] font-medium text-[#6a4310] dark:text-[#ffd89b]">Continue with Browser</div>
+              </div>
+              <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-[#1e6e50]/10 border border-[#1e6e50]/20 text-[#1e6e50] dark:text-[#8fd4b4]">One-click</span>
+            </div>
+
+            {def.oauthAvailable ? (
+              def.oauthReady ? (
                 <>
                   <button
                     onClick={startOAuth}
                     disabled={busy !== null}
-                    className="btn-jade w-full py-2.5 rounded-xl text-[13.5px] font-medium flex items-center justify-center gap-2 disabled:opacity-60"
+                    className="w-full py-3 rounded-xl text-[14px] font-semibold flex items-center justify-center gap-2 disabled:opacity-60 shadow-lg hover:shadow-xl transition-all"
+                    style={{ background: `linear-gradient(135deg, ${meta?.color || '#1e6e50'} 0%, ${meta?.color || '#1e6e50'}dd 100%)`, color: 'white' }}
                   >
-                    {busy === 'oauth' ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
-                    {busy === 'oauth' ? 'Waiting for authorization…' : `Authorize with ${def.name}`}
+                    {busy === 'oauth' ? <Loader2 size={16} className="animate-spin" /> : <ExternalLink size={16} />}
+                    {busy === 'oauth' ? 'Waiting for browser…' : `Connect ${def.name} in Browser`}
                   </button>
+                  <p className="text-[11px] text-[#8a7d60] mt-2 text-center leading-relaxed">
+                    Opens a secure popup to <strong>{def.name}</strong> — log in once, no token to copy. Your credential is verified live and encrypted.
+                  </p>
                   {def.oauthScopes.length > 0 && (
-                    <div className="mt-2.5">
-                      <div className="text-[11px] text-[#8a7d60] mb-1.5">Scopes requested:</div>
+                    <div className="mt-3 p-2.5 rounded-xl bg-[#b87333]/5 border border-[#b87333]/15">
+                      <div className="text-[10px] uppercase tracking-wide text-[#8a7d60] mb-1">Permissions requested:</div>
                       <div className="flex flex-wrap gap-1">
-                        {def.oauthScopes.map((s) => (
-                          <span key={s} className="text-[10px] px-2 py-0.5 rounded-full border border-[#b87333]/25 text-[#8a7d60] break-all">
-                            {s.replace('https://www.googleapis.com/auth/', '')}
+                        {def.oauthScopes.slice(0, 5).map((s) => (
+                          <span key={s} className="text-[10px] px-1.5 py-0.5 rounded-full bg-white dark:bg-black/20 border border-[#b87333]/20 text-[#8a7d60] break-all">
+                            {s.replace('https://www.googleapis.com/auth/', '').replace('https://api.', '')}
                           </span>
                         ))}
+                        {def.oauthScopes.length > 5 && <span className="text-[10px] text-[#8a7d60]">+{def.oauthScopes.length - 5} more</span>}
                       </div>
                     </div>
                   )}
                 </>
               ) : (
-                <div className="p-3 rounded-xl border border-[#b87333]/25 text-[12px] text-[#7a6746] dark:text-[#a99a7c] leading-relaxed">
-                  <div className="flex items-center gap-1.5 mb-1 text-[#b5661a] dark:text-[#ffd89b] font-medium">
-                    <Lock size={12} /> OAuth not configured
+                <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5">
+                  <div className="flex items-center gap-2 mb-2 text-amber-700 dark:text-amber-300 font-medium text-[13px]">
+                    <Lock size={14} /> Browser login not yet enabled
                   </div>
-                  Add{' '}
-                  {def.oauthEnvKeys.map((k, i) => (
-                    <span key={k}>
-                      <code className="px-1 py-0.5 rounded bg-[#b87333]/12 text-[#b5661a] dark:text-[#ffd89b] text-[11px]">{k}</code>
-                      {i < def.oauthEnvKeys.length - 1 ? ' and ' : ''}
-                    </span>
-                  ))}{' '}
-                  in the Secrets tab to enable one-click connect. Until then, use the token method below — it works right now.
+                  <p className="text-[12px] text-[#7a6746] dark:text-[#a99a7c] leading-relaxed mb-2">
+                    One-click browser login for <strong>{def.name}</strong> needs an OAuth app. Until your admin enables it, use the token method below — it works in 30 seconds.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {def.oauthEnvKeys.map((k) => (
+                      <code key={k} className="px-2 py-1 rounded-lg bg-black/5 dark:bg-white/10 border border-[#b87333]/20 text-[#b5661a] dark:text-[#ffd89b] text-[11px] font-mono">{k}</code>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-[#8a7d60] mt-2">
+                    Tip: Create the OAuth app at <a href={def.docs} target="_blank" rel="noreferrer" className="underline hover:text-[#ff9933]">docs</a>, then add the keys to Secrets → one-click will light up.
+                  </p>
                 </div>
-              )}
-            </div>
-          )}
+              )
+            ) : (
+              <>
+                <div className="p-3 rounded-xl border border-[#b87333]/20 bg-[#b87333]/5 text-[12px] text-[#7a6746] dark:text-[#a99a7c]">
+                  <strong>{def.name}</strong> does not support one-click OAuth — token is the official method and works instantly.
+                </div>
+                <button
+                  onClick={() => document.getElementById('token-section')?.scrollIntoView({ behavior: 'smooth' })}
+                  className="w-full mt-3 py-2.5 rounded-xl border border-[#b87333]/25 text-[#8a7d60] hover:text-[#ff9933] hover:border-[#ff9933]/30 text-[13px] flex items-center justify-center gap-2"
+                >
+                  <KeyRound size={14} /> Use token instead ↓
+                </button>
+              </>
+            )}
+          </div>
 
-          {/* ---------------------------------------------------- Token path */}
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.24em] text-[#8a7350] dark:text-[#a99a7c] mb-2">
-              {def.oauthAvailable ? 'Option 2 · ' : ''}Connect with a {def.tokenLabel.toLowerCase()}
+          {/* ---------------------------------------------------- Token path (fallback) */}
+          <div id="token-section" className="pt-4 border-t border-[#b87333]/15">
+            <div className="flex items-center gap-2 mb-2">
+              <KeyRound size={14} className="text-[#8a7d60]" />
+              <div className="text-[10px] uppercase tracking-[0.24em] text-[#8a7350] dark:text-[#a99a7c]">
+                {def.oauthAvailable ? 'Alternative · ' : ''}Connect with {def.tokenLabel.toLowerCase()}
+              </div>
+              <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full border border-[#b87333]/20 text-[#8a7d60]">Works always</span>
             </div>
             <p className="text-[12px] text-[#7a6746] dark:text-[#a99a7c] leading-relaxed mb-3">{def.tokenHelp}</p>
             <a
@@ -612,17 +663,14 @@ export default function ConnectorsPanel({ authHeaders }: Props) {
               <div className="text-center py-14 text-[#8a7d60] text-sm">No connectors match “{query}”.</div>
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {filtered.map((d) => {
+                  {filtered.map((d) => {
                   const meta = CONNECTOR_MAP[d.id];
                   const conn = byProvider[d.id];
                   return (
                     <motion.div key={d.id} layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="connector-card rounded-2xl p-4 flex flex-col">
                       <div className="flex items-start justify-between mb-2">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center text-lg"
-                          style={{ background: `${meta?.color || '#b87333'}1e`, border: `1px solid ${meta?.color || '#b87333'}44` }}
-                        >
-                          {meta?.emoji || '🔌'}
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white border shadow-sm p-1.5" style={{ borderColor: `${meta?.color || '#b87333'}18` }}>
+                          <ConnectorLogo meta={meta} size={22} withBg={false} />
                         </div>
                         {conn && (
                           <span
@@ -682,11 +730,8 @@ export default function ConnectorsPanel({ authHeaders }: Props) {
                       {c.account_avatar ? (
                         <img src={c.account_avatar} alt="" className="w-11 h-11 rounded-xl object-cover border border-[#b87333]/30 shrink-0" />
                       ) : (
-                        <div
-                          className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0"
-                          style={{ background: `${meta?.color || '#b87333'}1e`, border: `1px solid ${meta?.color || '#b87333'}44` }}
-                        >
-                          {meta?.emoji || '🔌'}
+                        <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-white border shadow-sm p-1.5 shrink-0" style={{ borderColor: `${meta?.color || '#b87333'}18` }}>
+                          <ConnectorLogo meta={meta} size={24} withBg={false} />
                         </div>
                       )}
                       <div className="min-w-0 flex-1">

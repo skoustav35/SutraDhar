@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper: owner check
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Chats: user can read/write only own chats
+    match /chats/{docId} {
+      allow read, write: if isOwner(resource.data.user_id) || (request.auth != null && request.resource.data.user_id == request.auth.uid);
+      // For create, check incoming data
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+    }
+
+    match /messages/{docId} {
+      allow read: if isOwner(resource.data.user_id);
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if isOwner(resource.data.user_id);
+    }
+
+    match /runs/{docId} {
+      allow read: if isOwner(resource.data.user_id);
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if isOwner(resource.data.user_id);
+    }
+
+    match /api_keys/{docId} {
+      allow read, write: if isOwner(resource.data.user_id);
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+    }
+
+    match /agents/{docId} {
+      allow read, write: if isOwner(resource.data.user_id);
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+    }
+
+    match /connectors/{docId} {
+      allow read, write: if isOwner(resource.data.user_id);
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+    }
+
+    match /scheduled_tasks/{docId} {
+      allow read, write: if isOwner(resource.data.user_id);
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+    }
+
+    match /connector_events/{docId} {
+      allow read: if isOwner(resource.data.user_id);
+      allow create: if isSignedIn();
+    }
+
+    match /oauth_states/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Public research collections: read-only for all, write only via Admin SDK
+    match /model_specs/{docId} { allow read: if true; allow write: if false; }
+    match /research_sections/{docId} { allow read: if true; allow write: if false; }
+    match /benchmarks/{docId} { allow read: if true; allow write: if false; }
+    match /training_stages/{docId} { allow read: if true; allow write: if false; }
+    match /roadmap_items/{docId} { allow read: if true; allow write: if false; }
+    match /company_metrics/{docId} { allow read: if true; allow write: if false; }
+    match /papers/{docId} { allow read: if true; allow write: if false; }
+
+    // Deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

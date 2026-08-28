@@ -1,4 +1,4 @@
-import supabase from './db-client.js';
+import { adminDb, adminAuth } from './firebase-admin.js';
 
 // Map any legacy provider model key to a neutral public model name so old
 // history never leaks underlying model/provider names.
@@ -62,8 +62,8 @@ async function getUser(req) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return null;
   try {
-    const { data } = await supabase.auth.getUser(token);
-    return data?.user || null;
+    const decoded = await adminAuth.verifyIdToken(token);
+    return { uid: decoded.uid, email: decoded.email };
   } catch {
     return null;
   }
@@ -82,14 +82,15 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const chatId = req.query.chatId;
       if (!chatId) return res.status(400).json({ error: 'Missing chatId' });
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('chat_id', chatId)
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true });
-      if (error) throw error;
-      return res.status(200).json((data || []).map(sanitizeMessage));
+      
+      const snapshot = await adminDb.collection('messages')
+        .where('chat_id', '==', chatId)
+        .where('user_id', '==', user.uid)
+        .orderBy('created_at', 'asc')
+        .get();
+      
+      const messages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      return res.status(200).json(messages.map(sanitizeMessage));
     }
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {

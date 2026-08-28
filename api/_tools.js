@@ -5,26 +5,26 @@
 // needed; those calls are then executed against the providers' REAL APIs and
 // the results are injected into the reasoning context. Every execution is
 // written to `connector_events`.
-import supabase from './db-client.js';
+import { adminDb } from './firebase-admin.js';
 import { PROVIDERS } from './_providers.js';
 import { runAction } from './_connectors-runtime.js';
 import { streamCompletion } from './_llm.js';
 
 // Planning is a short, cheap call. Try a few fast models so a single upstream
 // outage never silently disables tool use.
-const PLANNER_MODELS = ['hy3-free', 'mimo-v2.5-free', 'big-pickle', 'deepseek-v4-flash-free'];
+const PLANNER_MODELS = ['laguna-s-2.1-free', 'hy3-free', 'mimo-v2.5-free', 'muse-spark-1.2-contributor-free'];
 
 /** Tools available to a user right now, based on healthy connections. */
 export async function listUserTools(userId, restrictTo = null) {
-  const { data, error } = await supabase
-    .from('connectors')
-    .select('provider, status, account_name')
-    .eq('user_id', userId);
-  if (error || !data?.length) return [];
+  const snapshot = await adminDb.collection('connectors')
+    .where('user_id', '==', userId)
+    .get();
+  if (snapshot.empty) return [];
 
   const allow = Array.isArray(restrictTo) && restrictTo.length ? new Set(restrictTo) : null;
   const tools = [];
-  for (const row of data) {
+  for (const doc of snapshot.docs) {
+    const row = { id: doc.id, ...doc.data() };
     if (row.status !== 'connected') continue;
     if (allow && !allow.has(row.provider)) continue;
     const def = PROVIDERS[row.provider];
@@ -61,25 +61,35 @@ function manifest(tools) {
     .join('\n');
 }
 
-const PLANNER_SYSTEM = `You decide whether a user's request needs live data or actions from their connected accounts.
+const BASE_PLANNER_SYSTEM = `You decide whether a user's request needs live data or actions from their connected accounts.
 You are given a tool list. Reply with ONLY a JSON object, no prose, no markdown fences:
 {"calls":[{"provider":"github","action":"list_repos","params":{"limit":5},"why":"needs their repo list"}]}
 Rules:
 - Return {"calls":[]} when the request can be answered from reasoning alone. This is the common case — do not invent work.
-- Never call a tool marked [WRITES DATA] unless the user explicitly asked for that action to be performed.
 - Maximum 3 calls. Only use providers and actions from the list. Only use listed param names.
 - Prefer read-only calls that directly supply the missing facts.`;
 
+const PLANNER_SYSTEM = BASE_PLANNER_SYSTEM + `
+- Never call a tool marked [WRITES DATA] unless the user explicitly asked for that action to be performed.`;
+
+const AGENT_PLANNER_SYSTEM = BASE_PLANNER_SYSTEM + `
+- You are powering an autonomous agent with FULL connector powers. The agent's persona and its assigned connectors mean it is EXPECTED to use tools aggressively and effectively. For this agent:
+  * You SHOULD call tools whenever they could help — do not wait for an explicit "send/create" keyword. If the user's request hints at needing live data (e.g. "summarize my repos", "what's on my calendar", "draft an email"), CALL the relevant tool immediately.
+  * You MAY and SHOULD call [WRITES DATA] tools (post message, send email, create issue, etc.) whenever they serve the request — the agent is explicitly authorized. Prefer to act rather than just describe.
+  * Use up to 5 calls (not just 3) for agents, to fully leverage their connectors. Choose the most impactful actions.
+  * Still: only call tools from the list, never hallucinate params, and never call a tool with missing required params.`;
+
 /** Ask a fast model which real tool calls (if any) the request needs. */
-export async function planToolCalls({ prompt, tools, history = [] }) {
+export async function planToolCalls({ prompt, tools, history = [], isAgent = false }) {
   if (!tools.length) return [];
   const recent = history
     .slice(-4)
     .map((m) => `${m.role}: ${String(m.content).slice(0, 400)}`)
     .join('\n');
 
+  const system = isAgent ? AGENT_PLANNER_SYSTEM : PLANNER_SYSTEM;
   const messages = [
-    { role: 'system', content: PLANNER_SYSTEM },
+    { role: 'system', content: system },
     {
       role: 'user',
       content: `Available tools:\n${manifest(tools)}\n\n${recent ? `Recent conversation:\n${recent}\n\n` : ''}User request:\n"""${String(prompt).slice(0, 4000)}"""\n\nJSON only.`,
@@ -107,8 +117,9 @@ export async function planToolCalls({ prompt, tools, history = [] }) {
   if (!parsed) return [];
 
   const valid = new Map(tools.map((t) => [`${t.provider}.${t.action}`, t]));
+  const maxCalls = isAgent ? 8 : 5;
   return (Array.isArray(parsed.calls) ? parsed.calls : [])
-    .slice(0, 3)
+    .slice(0, maxCalls)
     .filter((c) => c && valid.has(`${c.provider}.${c.action}`))
     .map((c) => ({
       provider: c.provider,
@@ -166,17 +177,38 @@ export function formatToolContext(results) {
   ].join('\n');
 }
 
+function formatAvailableTools(tools) {
+  if (!tools.length) return '';
+  const lines = tools.map((t) => `- ${t.provider}.${t.action} — ${t.label}: ${t.description} Params: ${t.params.map((p) => `${p.name}${p.required ? '*' : ''}:${p.type}`).join(', ') || 'none'}${t.write ? ' [WRITES]' : ''}`).join('\n');
+  return [
+    '<<AVAILABLE_TOOLS>>',
+    'You have these live connectors/tools available RIGHT NOW (already connected and verified). You can call them via the planner, but you also have the capability description for reasoning:',
+    lines,
+    '<<END_AVAILABLE_TOOLS>>',
+    'If the planner did not call a tool but you still need live data, say so in your answer and the system will call it next turn.',
+  ].join('\n');
+}
+
 /**
  * Full pre-flight: plan, execute and format. Returns the context block plus a
  * machine-readable log for the UI.
  */
-export async function gatherToolContext({ userId, prompt, history, restrictTo = null, onEvent = () => {} }) {
+export async function gatherToolContext({ userId, prompt, history, restrictTo = null, onEvent = () => {}, isAgent = false }) {
   const tools = await listUserTools(userId, restrictTo);
   if (!tools.length) return { context: '', results: [], toolCount: 0 };
 
-  const calls = await planToolCalls({ prompt, tools, history });
-  if (!calls.length) return { context: '', results: [], toolCount: tools.length };
+  // If this is an agent call, allow very effective tool-use
+  const effectiveIsAgent = isAgent || (Array.isArray(restrictTo) && restrictTo.length > 0);
+  const calls = await planToolCalls({ prompt, tools, history, isAgent: effectiveIsAgent });
+  if (!calls.length) {
+    // For agents, always inject the available tools list so the LLM knows its powers, even if planner chose 0 calls
+    const availableContext = effectiveIsAgent ? formatAvailableTools(tools) : '';
+    return { context: availableContext, results: [], toolCount: tools.length };
+  }
 
   const results = await executeToolCalls({ userId, calls, onEvent });
-  return { context: formatToolContext(results), results, toolCount: tools.length };
+  const liveContext = formatToolContext(results);
+  // For agents, also append the full tool list so the model understands its full capabilities
+  const availableContext = effectiveIsAgent ? '\n\n' + formatAvailableTools(tools) : '';
+  return { context: liveContext + availableContext, results, toolCount: tools.length };
 }

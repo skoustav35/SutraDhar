@@ -6,13 +6,13 @@
 // the resulting token against the vendor's identity API, stores it encrypted,
 // then closes the popup via postMessage.
 import crypto from 'node:crypto';
-import supabase from './db-client.js';
+import { adminDb, adminAuth } from './firebase-admin.js';
 import { buildAuthorizeUrl, exchangeCode, getProvider, oauthConfig, ProviderError } from './_providers.js';
-import { cors, getUser, originOf, verifyAndSave } from './_connectors-runtime.js';
+import { cors, originOf, verifyAndSave } from './_connectors-runtime.js';
 import { randomToken, sha256base64url } from './_crypto.js';
 
 function escapeHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>');
 }
 
 function closingPage({ ok, provider, message }) {
@@ -56,9 +56,12 @@ export default async function handler(req, res) {
         .send(closingPage({ ok: false, provider: provider || '', message: errorDescription || oauthError }));
     }
     try {
-      const { data: st } = await supabase.from('oauth_states').select('*').eq('state', state).maybeSingle();
-      if (!st) throw new ProviderError('This authorization link has expired. Please start the connection again.', 400);
-      await supabase.from('oauth_states').delete().eq('state', state);
+      const snapshot = await adminDb.collection('oauth_states').where('state', '==', state).limit(1).get();
+      if (snapshot.empty) throw new ProviderError('This authorization link has expired. Please start the connection again.', 400);
+      const stDoc = snapshot.docs[0];
+      const st = { id: stDoc.id, ...stDoc.data() };
+      
+      await adminDb.collection('oauth_states').doc(st.id).delete();
 
       if (Date.now() - new Date(st.created_at).getTime() > 15 * 60 * 1000) {
         throw new ProviderError('Authorization timed out. Please try again.', 400);
@@ -95,7 +98,14 @@ export default async function handler(req, res) {
   }
 
   // ------------------------------------------------------------------- start
-  const user = await getUser(req);
+  // For the start endpoint, we need to get the user from the token
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  let user = null;
+  try {
+    const decoded = await adminAuth.verifyIdToken(token);
+    user = { uid: decoded.uid, email: decoded.email };
+  } catch { /* ignore */ }
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!provider) return res.status(400).json({ error: 'provider required' });
 
@@ -110,18 +120,23 @@ export default async function handler(req, res) {
       codeChallenge = sha256base64url(codeVerifier);
     }
 
-    const { error } = await supabase.from('oauth_states').insert({
+    await adminDb.collection('oauth_states').add({
       state: stateToken,
-      user_id: user.id,
+      user_id: user.uid,
       provider,
       redirect_uri: redirectUri,
       code_verifier: codeVerifier,
       origin: originOf(req),
+      created_at: new Date().toISOString(),
     });
-    if (error) throw new ProviderError(error.message, 500);
 
     // Housekeeping: drop states older than an hour.
-    await supabase.from('oauth_states').delete().lt('created_at', new Date(Date.now() - 3600_000).toISOString());
+    const oldStates = await adminDb.collection('oauth_states')
+      .where('created_at', '<', new Date(Date.now() - 3600_000).toISOString())
+      .get();
+    const batch = adminDb.batch();
+    oldStates.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
 
     const url = buildAuthorizeUrl(provider, { redirectUri, state: stateToken, codeChallenge });
     return res.status(200).json({ url, redirectUri, scopes: cfg.scopes });

@@ -2,13 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowLeft, KeyRound, Plus, Copy, Check, Trash2, Eye, EyeOff, Terminal, Zap, Gauge, Crown, Activity, FlaskConical } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import supabase from '../lib/supabase';
 import type { ApiKey } from '../lib/types';
 import Mandala from '../components/Mandala';
+import { auth } from '../lib/firebase';
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await (auth as import('firebase/auth').Auth | undefined)?.currentUser?.getIdToken();
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) h.Authorization = `Bearer ${token}`;
   return h;

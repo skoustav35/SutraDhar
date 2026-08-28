@@ -3,8 +3,9 @@ import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { Brain, Lock, Sparkles, Zap, Users, Mail, ArrowRight, X, Loader2, Crown, Terminal, KeyRound, Sun, Moon, FlaskConical } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
-import supabase from '../lib/supabase';
 import { signInWithGoogle } from '../lib/googleAuth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 import Mandala from '../components/Mandala';
 
 function AuthModal({ onClose }: { onClose: () => void }) {
@@ -24,16 +25,11 @@ function AuthModal({ onClose }: { onClose: () => void }) {
     setLoading(true);
     try {
       if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({ email, password });
-        if (error) throw error;
-        const { error: e2 } = await supabase.auth.signInWithPassword({ email, password });
-        if (e2) {
-          setNotice('Account created. Check your email to confirm, then sign in.');
-          setMode('signin');
-        }
+        await createUserWithEmailAndPassword(auth, email, password);
+        setNotice('Account created successfully!');
+        setMode('signin');
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        await signInWithEmailAndPassword(auth, email, password);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed.');

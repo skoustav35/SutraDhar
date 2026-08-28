@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Marcellus&family=Rozha+One&family=Yatra+One&family=Jost:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
 
 /* Drive Tailwind's dark: variant from the <html data-theme> attribute. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));

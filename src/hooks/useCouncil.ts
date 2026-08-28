@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import supabase from '../lib/supabase';
+import { auth } from '../lib/firebase';
 import { rosterFor, type ChatMessage, type CouncilMember, type Phase, type Mode } from '../lib/types';
 
 interface RunArgs {
@@ -26,8 +26,7 @@ interface RunStatus {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const token = await (auth as import('firebase/auth').Auth | undefined)?.currentUser?.getIdToken();
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
@@ -72,7 +71,7 @@ export function useCouncil() {
     setProgressNote(st.note || '');
   }, []);
 
-  // Poll a run until it completes or errors. Resolves with the final status.
+  // Poll a run until it completes or errors – smoother 400ms for reasoning chamber + final delegation
   const pollRun = useCallback((runId: string, mode: Mode): Promise<RunStatus> => {
     return new Promise((resolve) => {
       clearPoll();
@@ -83,14 +82,21 @@ export function useCouncil() {
           const headers = await authHeaders();
           const res = await fetch(`/api/run-status?runId=${runId}`, { headers });
           if (res.ok) {
-            const st: RunStatus = await res.json();
-            if (st.found) {
-              misses = 0;
-              applyStatus(st);
-              if (st.status === 'complete' || st.status === 'error') {
-                clearPoll();
-                resolve(st);
+            const ct = res.headers.get('content-type') || '';
+            const txt = await res.text();
+            try {
+              const st: RunStatus = JSON.parse(txt);
+              if (st.found) {
+                misses = 0;
+                // Smooth apply – batch updates via rAF for reasoning chamber
+                requestAnimationFrame(() => applyStatus(st));
+                if (st.status === 'complete' || st.status === 'error') {
+                  clearPoll();
+                  resolve(st);
+                }
               }
+            } catch {
+              // ignore non-JSON (e.g. gateway HTML during deploy)
             }
           } else {
             misses += 1;
@@ -98,14 +104,13 @@ export function useCouncil() {
         } catch {
           misses += 1;
         }
-        // Give up gracefully after ~14 min of no contact (900s / 4s).
-        if (misses > 210) {
+        if (misses > 525) { // ~3.5 min at 400ms (was 210*2s=7min, now 525*0.4=3.5min for faster fallback)
           clearPoll();
           resolve({ found: false, mode });
         }
       };
       tick();
-      pollRef.current = setInterval(tick, 2000);
+      pollRef.current = setInterval(tick, 400);
     });
   }, [applyStatus]);
 

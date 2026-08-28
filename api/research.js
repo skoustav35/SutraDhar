@@ -1,7 +1,7 @@
 // Public research content endpoint — no auth required, this page is public.
 //   GET /api/research            → everything the research page needs
 //   GET /api/research?part=specs → a single collection
-import supabase from './db-client.js';
+import { adminDb } from './firebase-admin.js';
 
 const COLLECTIONS = {
   specs: { table: 'model_specs', order: 'order_index' },
@@ -15,9 +15,8 @@ const COLLECTIONS = {
 
 async function fetchAll(key) {
   const { table, order } = COLLECTIONS[key];
-  const { data, error } = await supabase.from(table).select('*').order(order, { ascending: true });
-  if (error) throw error;
-  return data || [];
+  const snapshot = await adminDb.collection(table).orderBy(order, 'asc').get();
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 }
 
 export default async function handler(req, res) {

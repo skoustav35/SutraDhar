@@ -17,35 +17,104 @@ export default function AgentsPanel({ authHeaders, onChatWithAgent }: Props) {
   const [editing, setEditing] = useState<Partial<Agent> | null>(null);
   const [forgePrompt, setForgePrompt] = useState('');
   const [forging, setForging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
 
   const load = useCallback(async () => {
+    setError(null);
     try {
       const res = await fetch('/api/agents', { headers: await authHeaders() });
-      if (res.ok) setAgents(await res.json());
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+      const text = await res.text();
+      if (!res.ok) {
+        let msg = `Failed to load agents (${res.status})`;
+        try { const j = JSON.parse(text); msg = j.error || msg; } catch {}
+        setError(msg);
+        return;
+      }
+      try {
+        const data = JSON.parse(text);
+        setAgents(Array.isArray(data) ? data : []);
+      } catch {
+        setError('Invalid response from server');
+      }
+    } catch (e) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : 'Failed to load agents');
+    } finally { setLoading(false); }
   }, [authHeaders]);
 
   useEffect(() => { load(); }, [load]);
 
   const save = async () => {
-    if (!editing?.name) return;
+    if (!editing?.name?.trim()) { setError('Agent name is required'); return; }
     const method = editing.id ? 'PUT' : 'POST';
-    const res = await fetch('/api/agents', { method, headers: await authHeaders(), body: JSON.stringify(editing) });
-    if (res.ok) { setEditing(null); load(); }
+    const prev = agents;
+    // Optimistic: if editing, update locally immediately
+    if (editing.id) {
+      setAgents((p) => p.map((a) => (a.id === editing.id ? { ...a, ...editing } as Agent : a)));
+    }
+    try {
+      const res = await fetch('/api/agents', { method, headers: await authHeaders(), body: JSON.stringify(editing) });
+      const text = await res.text();
+      let j: any = {};
+      try { j = JSON.parse(text); } catch {}
+      if (!res.ok) {
+        setError(j.error || `Failed to ${editing.id ? 'update' : 'create'} agent`);
+        setAgents(prev);
+        return;
+      }
+      setEditing(null);
+      showToast(editing.id ? 'Agent updated' : 'Agent created');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save');
+      setAgents(prev);
+    }
   };
 
   const remove = async (id: string) => {
+    const prev = agents;
     setAgents((p) => p.filter((a) => a.id !== id));
-    await fetch('/api/agents', { method: 'DELETE', headers: await authHeaders(), body: JSON.stringify({ id }) });
+    try {
+      const res = await fetch('/api/agents', { method: 'DELETE', headers: await authHeaders(), body: JSON.stringify({ id }) });
+      if (!res.ok) {
+        const txt = await res.text();
+        let msg = 'Failed to delete';
+        try { msg = JSON.parse(txt).error || msg; } catch {}
+        setError(msg);
+        setAgents(prev);
+      } else {
+        showToast('Agent removed');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete');
+      setAgents(prev);
+    }
   };
 
   const forge = async () => {
     if (!forgePrompt.trim()) return;
     setForging(true);
+    setError(null);
     try {
       const res = await fetch('/api/agent-forge', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ request: forgePrompt, save: true }) });
-      const j = await res.json();
-      if (j.ok) { setForgePrompt(''); load(); }
+      const text = await res.text();
+      let j: any = {};
+      try { j = JSON.parse(text); } catch { j = { ok:false, error: text.slice(0,200) } }
+      if (!res.ok || !j.ok) {
+        setError(j.error || `Forge failed (${res.status})`);
+        showToast(j.error || 'Forge failed');
+        return;
+      }
+      if (j.ok) {
+        setForgePrompt('');
+        showToast(`Forged ${j.agent?.name || 'agent'}!`);
+        await load();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Forge failed');
     } finally { setForging(false); }
   };
 
@@ -63,7 +132,19 @@ export default function AgentsPanel({ authHeaders, onChatWithAgent }: Props) {
             <Plus size={16} /> New Agent
           </button>
         </div>
-        <p className="text-[#7a6746] dark:text-[#a99a7c] text-sm mb-5">Craft specialized AI agents with their own skills, connectors and persona — or let Sutradhar forge one for you.</p>
+        <p className="text-[#7a6746] dark:text-[#a99a7c] text-sm mb-5">Craft specialized AI agents with their own skills, connectors and persona — or let Sutradhar forge one for you. You can also just chat “create an agent that …” and Sutradhar will forge it inline.</p>
+
+        {error && (
+          <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-300 text-sm">
+            <span className="flex-1">{error}</span>
+            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+          </div>
+        )}
+        {toast && (
+          <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-[#8fd4b4] text-sm">
+            <Check size={14} /> {toast}
+          </div>
+        )}
 
         {/* AI Forge */}
         <div className="jade-panel p-4 mb-6">
@@ -119,10 +200,15 @@ export default function AgentsPanel({ authHeaders, onChatWithAgent }: Props) {
                   </div>
                 )}
                 {a.connectors?.length > 0 && (
-                  <div className="flex items-center gap-1 mt-2.5">
-                    {a.connectors.slice(0, 6).map((c) => (
-                      <span key={c} title={CONNECTOR_MAP[c]?.name} className="text-sm">{CONNECTOR_MAP[c]?.emoji || '🔌'}</span>
-                    ))}
+                  <div className="flex items-center gap-1.5 mt-2.5">
+                    {a.connectors.slice(0, 6).map((c) => {
+                      const m = CONNECTOR_MAP[c];
+                      return m?.logo ? (
+                        <img key={c} src={m.logo} alt={m.name} title={m.name} width={18} height={18} className="w-[18px] h-[18px] object-contain bg-white rounded-md p-0.5 border shadow-sm" style={{ borderColor: `${m.color}22` }} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                      ) : (
+                        <span key={c} title={m?.name} className="text-sm">{m?.emoji || '🔌'}</span>
+                      );
+                    })}
                   </div>
                 )}
                 <div className="flex items-center gap-1.5 mt-3.5 pt-3 border-t border-[#b87333]/15">
@@ -189,7 +275,10 @@ export default function AgentsPanel({ authHeaders, onChatWithAgent }: Props) {
                 {CONNECTORS.map((c) => {
                   const on = (editing.connectors || []).includes(c.id);
                   return (
-                    <button key={c.id} onClick={() => setEditing({ ...editing, connectors: toggleIn(editing.connectors || [], c.id) })} className={`text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1 transition-all ${on ? 'bg-[#1e6e50]/12 border-[#1e6e50]/45 text-[#1e6e50] dark:text-[#8fd4b4]' : 'border-[#b87333]/25 text-[#8a7d60] hover:border-[#1e6e50]/30'}`}>{c.emoji} {c.name}</button>
+                    <button key={c.id} onClick={() => setEditing({ ...editing, connectors: toggleIn(editing.connectors || [], c.id) })} className={`text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1.5 transition-all ${on ? 'bg-[#1e6e50]/12 border-[#1e6e50]/45 text-[#1e6e50] dark:text-[#8fd4b4]' : 'border-[#b87333]/25 text-[#8a7d60] hover:border-[#1e6e50]/30'}`}>
+                      <img src={c.logo} alt={c.name} width={14} height={14} className="w-3.5 h-3.5 object-contain bg-white rounded-sm p-0.5" style={{ border: `1px solid ${c.color}18` }} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                      {c.name}
+                    </button>
                   );
                 })}
               </div>

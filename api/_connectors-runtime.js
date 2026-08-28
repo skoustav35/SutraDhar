@@ -1,21 +1,10 @@
 // Shared runtime for real connector operations: credential resolution,
 // automatic OAuth refresh, live verification, action execution and logging.
-import supabase from './db-client.js';
+import { adminDb } from './firebase-admin.js';
 import { decrypt, encrypt } from './_crypto.js';
 import { PROVIDERS, ProviderError, getProvider, refreshAccessToken } from './_providers.js';
 
 export { ProviderError };
-
-export async function getUser(req) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return null;
-  try {
-    const { data } = await supabase.auth.getUser(token);
-    return data?.user || null;
-  } catch {
-    return null;
-  }
-}
 
 /** Strip every secret before a row is sent to the browser. */
 export function publicConnector(row) {
@@ -51,7 +40,7 @@ function sanitizeMeta(meta) {
 
 export async function logEvent({ userId, provider, action, status, durationMs, summary, detail, source }) {
   try {
-    await supabase.from('connector_events').insert({
+    await adminDb.collection('connector_events').add({
       user_id: userId,
       provider,
       action,
@@ -60,6 +49,7 @@ export async function logEvent({ userId, provider, action, status, durationMs, s
       summary: String(summary || '').slice(0, 400),
       detail: detail || {},
       source: source || 'manual',
+      created_at: new Date().toISOString(),
     });
   } catch {
     /* logging must never break the request */
@@ -67,14 +57,12 @@ export async function logEvent({ userId, provider, action, status, durationMs, s
 }
 
 export async function loadConnector(userId, provider) {
-  const { data, error } = await supabase
-    .from('connectors')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('provider', provider)
-    .maybeSingle();
-  if (error) throw new ProviderError(error.message, 500);
-  return data || null;
+  const snapshot = await adminDb.collection('connectors')
+    .where('user_id', '==', userId)
+    .where('provider', '==', provider)
+    .limit(1)
+    .get();
+  return snapshot.docs[0] ? { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null;
 }
 
 /**
@@ -92,17 +80,14 @@ export async function resolveToken(row) {
   if (needsRefresh && refresh) {
     const fresh = await refreshAccessToken(row.provider, refresh);
     token = fresh.access_token;
-    await supabase
-      .from('connectors')
-      .update({
-        access_token_enc: encrypt(fresh.access_token),
-        refresh_token_enc: encrypt(fresh.refresh_token),
-        token_expires_at: fresh.expires_in ? new Date(Date.now() + fresh.expires_in * 1000).toISOString() : null,
-        status: 'connected',
-        last_error: '',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', row.id);
+    await adminDb.collection('connectors').doc(row.id).update({
+      access_token_enc: encrypt(fresh.access_token),
+      refresh_token_enc: encrypt(fresh.refresh_token),
+      token_expires_at: fresh.expires_in ? new Date(Date.now() + fresh.expires_in * 1000).toISOString() : null,
+      status: 'connected',
+      last_error: '',
+      updated_at: new Date().toISOString(),
+    });
   } else if (needsRefresh && !refresh) {
     await markError(row.id, 'Access token expired and no refresh token is available. Reconnect required.', 'expired');
     throw new ProviderError('This connection has expired. Please reconnect.', 401);
@@ -112,23 +97,19 @@ export async function resolveToken(row) {
 }
 
 export async function markError(id, message, status = 'error') {
-  await supabase
-    .from('connectors')
-    .update({ status, last_error: String(message).slice(0, 500), updated_at: new Date().toISOString() })
-    .eq('id', id);
+  await adminDb.collection('connectors').doc(id).update({
+    status, last_error: String(message).slice(0, 500), updated_at: new Date().toISOString()
+  });
 }
 
 export async function markHealthy(id, patch = {}) {
-  await supabase
-    .from('connectors')
-    .update({
-      status: 'connected',
-      last_error: '',
-      last_verified_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      ...patch,
-    })
-    .eq('id', id);
+  await adminDb.collection('connectors').doc(id).update({
+    status: 'connected',
+    last_error: '',
+    last_verified_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...patch,
+  });
 }
 
 /**
@@ -181,13 +162,13 @@ export async function verifyAndSave({ userId, provider, token, refreshToken = ''
   const existing = await loadConnector(userId, provider);
   let row;
   if (existing) {
-    const { data, error } = await supabase.from('connectors').update(payload).eq('id', existing.id).select().single();
-    if (error) throw new ProviderError(error.message, 500);
-    row = data;
+    await adminDb.collection('connectors').doc(existing.id).update(payload);
+    const updated = await adminDb.collection('connectors').doc(existing.id).get();
+    row = { id: existing.id, ...updated.data() };
   } else {
-    const { data, error } = await supabase.from('connectors').insert({ ...payload, connected_at: now }).select().single();
-    if (error) throw new ProviderError(error.message, 500);
-    row = data;
+    const docRef = await adminDb.collection('connectors').add({ ...payload, connected_at: now });
+    const created = await docRef.get();
+    row = { id: docRef.id, ...created.data() };
   }
 
   await logEvent({

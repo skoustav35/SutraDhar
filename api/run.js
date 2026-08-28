@@ -1,5 +1,5 @@
-import supabase from './db-client.js';
-import { runPipeline, MODE_CONFIGS, COUNCIL, JUDGE_MODEL, MODEL_NAMES, DIRECT_SYSTEM, streamCompletion, buildContext } from './_llm.js';
+import { adminDb, adminAuth } from './firebase-admin.js';
+import { runPipeline, MODE_CONFIGS, COUNCIL, JUDGE_MODEL, MODEL_NAMES, DIRECT_SYSTEM, streamCompletion, buildContext, sanitizeIdentity } from './_llm.js';
 import { gatherToolContext } from './_tools.js';
 
 export const config = { maxDuration: 800 };
@@ -43,8 +43,8 @@ async function getUser(req) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return null;
   try {
-    const { data } = await supabase.auth.getUser(token);
-    return data?.user || null;
+    const decoded = await adminAuth.verifyIdToken(token);
+    return { uid: decoded.uid, email: decoded.email };
   } catch {
     return null;
   }
@@ -64,13 +64,13 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history, agent
 
   const flush = async (force = false) => {
     const now = Date.now();
-    if (!force && now - lastWrite < 1100) return;
+    if (!force && now - lastWrite < 150) return;
     lastWrite = now;
     try {
-      await supabase.from('runs').update({
+      await adminDb.collection('runs').doc(runId).update({
         council: toPublicCouncil(council), final: finalAcc, phase, note, status: phase === 'done' ? 'complete' : phase,
         updated_at: new Date().toISOString(),
-      }).eq('id', runId);
+      });
     } catch { /* non-fatal */ }
   };
 
@@ -128,6 +128,7 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history, agent
         prompt,
         history,
         restrictTo: agentConnectors,
+        isAgent: Array.isArray(agentConnectors) && agentConnectors.length > 0,
         onEvent: (ev) => {
           if (ev.type === 'tool_start') note = `Calling ${ev.provider} · ${ev.label || ev.action}…`;
           else if (ev.type === 'tool_done') note = `${ev.provider} responded — ${ev.summary || 'done'}`;
@@ -157,20 +158,21 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history, agent
     if (!finalAcc.trim()) {
       note = 'Sutradhar is composing a direct solution…';
       await flush(true);
-      const rescueModels = [JUDGE_MODEL, 'big-pickle', 'deepseek-v4-flash-free'];
+      const rescueModels = [JUDGE_MODEL, 'mimo-v2.5-free', 'laguna-s-2.1-free'];
       for (const rm of rescueModels) {
         try {
           const out = await streamCompletion({
             model: rm,
-            maxTokens: 64000,
+            maxTokens: 128000,
             effort: 'medium',
             messages: [{ role: 'system', content: DIRECT_SYSTEM }, ...buildContext(history), { role: 'user', content: prompt }],
-            onDelta: ({ kind, text }) => { if (kind === 'content') { finalAcc += text; flush(); } },
+            onDelta: ({ kind, text }) => { if (kind === 'content') { finalAcc += sanitizeIdentity(text); flush(); } },
           });
-          if (out.content) { finalAcc = out.content; break; }
+          if (out.content) { finalAcc = sanitizeIdentity(out.content); break; }
         } catch { /* try next */ }
       }
     }
+    finalAcc = sanitizeIdentity(finalAcc);
     if (!finalAcc.trim()) finalAcc = 'The problem is exceptionally demanding and the models are momentarily unavailable. Please try again.';
 
     // Record which live tools were actually called, so the provenance of the
@@ -186,20 +188,21 @@ async function orchestrate({ runId, chatId, userId, prompt, mode, history, agent
     council.forEach((c) => { if (c.status !== 'error') c.status = 'done'; });
     phase = 'done';
     note = '';
-    await supabase.from('runs').update({
+    await adminDb.collection('runs').doc(runId).update({
       status: 'complete', phase: 'done', note: '', council: toPublicCouncil(council), final: finalAcc, updated_at: new Date().toISOString(),
-    }).eq('id', runId);
+    });
 
     // Persist the final assistant message for permanent history.
     // model_used is stored as the neutral public model name (never the provider).
-    await supabase.from('messages').insert({
+    await adminDb.collection('messages').add({
       chat_id: chatId, user_id: userId, role: 'assistant', content: finalAcc, model_used: MODEL_NAMES[mode] || 'Sutradhar 6.7',
       council: toPublicCouncil(council),
+      created_at: new Date().toISOString(),
     });
-    await supabase.from('chats').update({ updated_at: new Date().toISOString() }).eq('id', chatId);
+    await adminDb.collection('chats').doc(chatId).update({ updated_at: new Date().toISOString() });
   } catch (err) {
     try {
-      await supabase.from('runs').update({ status: 'error', note: err.message, updated_at: new Date().toISOString() }).eq('id', runId);
+      await adminDb.collection('runs').doc(runId).update({ status: 'error', note: err.message, updated_at: new Date().toISOString() });
     } catch { /* noop */ }
   }
 }
@@ -218,39 +221,67 @@ export default async function handler(req, res) {
   if (!prompt || typeof prompt !== 'string') return res.status(400).json({ error: 'Missing prompt' });
   const useMode = MODE_CONFIGS[mode] ? mode : 'trio';
 
+  // Helper to create a polished, formal chat title from the raw prompt (strip CTX preamble)
+  function polishTitle(raw) {
+    // Strip the <<CTX>>...<<END>> preamble that the frontend wraps around the user text
+    const withoutCtx = String(raw || '').replace(/<<CTX>>[\s\S]*?<<END>>\s*/g, '').trim();
+    // Take first meaningful line, remove extra punctuation, capitalize
+    let t = withoutCtx.split('\n')[0].trim();
+    // Remove leading non-alphanumeric, collapse spaces
+    t = t.replace(/^\W+/, '').replace(/\s+/g, ' ').trim();
+    if (!t) return 'New Council';
+    // Title-case-ish: first letter upper, not fully lowercasing to preserve proper nouns
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    // Truncate to ~60 chars at word boundary
+    if (t.length > 60) {
+      t = t.slice(0, 57).replace(/\s+\S*$/, '').trim() + '…';
+    }
+    // Ensure it doesn't look like a raw instruction
+    if (/^If you need clarification/i.test(t)) return 'New Council';
+    return t;
+  }
+
   try {
     // 1) Create the chat immediately with a name (or touch existing).
     let cid = chatId || null;
     let chatTitle = '';
     if (!cid) {
-      chatTitle = prompt.slice(0, 60).replace(/\s+/g, ' ').trim() || 'New Council';
-      const { data: chat, error } = await supabase.from('chats').insert({ user_id: user.id, title: chatTitle }).select().single();
-      if (error) throw error;
-      cid = chat.id;
+      chatTitle = polishTitle(prompt) || 'New Council';
+      const chatRef = await adminDb.collection('chats').add({
+        user_id: user.uid,
+        title: chatTitle,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      cid = chatRef.id;
     } else {
-      await supabase.from('chats').update({ updated_at: new Date().toISOString() }).eq('id', cid).eq('user_id', user.id);
+      await adminDb.collection('chats').doc(cid).update({ updated_at: new Date().toISOString() });
     }
 
     // 2) Persist the user's message immediately.
-    await supabase.from('messages').insert({ chat_id: cid, user_id: user.id, role: 'user', content: prompt, model_used: null, council: null });
+    await adminDb.collection('messages').add({
+      chat_id: cid, user_id: user.uid, role: 'user', content: prompt, model_used: null, council: null,
+      created_at: new Date().toISOString(),
+    });
 
     // 3) Create the live run row.
-    const { data: run, error: runErr } = await supabase.from('runs').insert({
-      chat_id: cid, user_id: user.id, prompt, mode: useMode,
+    const runRef = await adminDb.collection('runs').add({
+      chat_id: cid, user_id: user.uid, prompt, mode: useMode,
       status: useMode && MODE_CONFIGS[useMode].synthesize ? 'solving' : 'answering',
       phase: MODE_CONFIGS[useMode].synthesize ? 'solving' : 'answering',
       note: '', council: toPublicCouncil(rosterFor(useMode)), final: '',
-    }).select().single();
-    if (runErr) throw runErr;
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
 
     // 4) Respond immediately so the UI can show the new chat and let the user leave.
-    res.status(200).json({ chatId: cid, runId: run.id, title: chatTitle });
+    res.status(200).json({ chatId: cid, runId: runRef.id, title: chatTitle });
 
     // 5) Run the pipeline in the background (survives the user leaving).
     const job = orchestrate({
-      runId: run.id,
+      runId: runRef.id,
       chatId: cid,
-      userId: user.id,
+      userId: user.uid,
       prompt,
       mode: useMode,
       history,
