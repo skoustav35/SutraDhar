@@ -22,7 +22,7 @@ export default async function handler(req, res) {
     'You are the Council Oracle, an elite mathematician and reasoner. Solve the problem completely and rigorously. Show full, clear step-by-step working, then give the definitive result under a bold "## Final Answer" heading. Use LaTeX ($...$ inline, $$...$$ display) for all mathematics. Be thorough yet readable.';
 
   // Try a couple of models in order so this is extremely unlikely to fail.
-  const models = [JUDGE_MODEL, 'mimo-v2.5-free', 'laguna-s-2.1-free'];
+  const models = [JUDGE_MODEL, 'big-pickle', 'deepseek-v4-flash-free'];
   let delivered = false;
 
   for (const model of models) {

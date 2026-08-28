@@ -1,4 +1,4 @@
-import { adminDb, adminAuth } from './firebase-admin.js';
+import supabase from './db-client.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -12,8 +12,8 @@ export default async function handler(req, res) {
 
   let userId = null;
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    userId = decoded.uid;
+    const { data } = await supabase.auth.getUser(token);
+    userId = data?.user?.id || null;
   } catch { /* ignore */ }
   if (!userId) return res.status(401).json({ error: 'Invalid token' });
 
@@ -24,29 +24,16 @@ export default async function handler(req, res) {
     let savedChatId = chatId || null;
     if (!savedChatId) {
       const title = prompt.slice(0, 60).replace(/\s+/g, ' ').trim() || 'New Council';
-      const chatRef = await adminDb.collection('chats').add({
-        user_id: userId, title,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
-      savedChatId = chatRef.id;
+      const { data: chat } = await supabase.from('chats').insert({ user_id: userId, title }).select().single();
+      savedChatId = chat?.id || null;
     } else {
-      await adminDb.collection('chats').doc(savedChatId).update({ updated_at: new Date().toISOString() });
+      await supabase.from('chats').update({ updated_at: new Date().toISOString() }).eq('id', savedChatId).eq('user_id', userId);
     }
     if (savedChatId) {
-      const batch = adminDb.batch();
-      const userMsgRef = adminDb.collection('messages').doc();
-      const assistantMsgRef = adminDb.collection('messages').doc();
-      
-      batch.set(userMsgRef, {
-        chat_id: savedChatId, user_id: userId, role: 'user', content: prompt, model_used: null, council: null,
-        created_at: new Date().toISOString(),
-      });
-      batch.set(assistantMsgRef, {
-        chat_id: savedChatId, user_id: userId, role: 'assistant', content: finalContent, model_used: 'nemotron-3-ultra-free', council: council || null,
-        created_at: new Date().toISOString(),
-      });
-      await batch.commit();
+      await supabase.from('messages').insert([
+        { chat_id: savedChatId, user_id: userId, role: 'user', content: prompt, model_used: null, council: null },
+        { chat_id: savedChatId, user_id: userId, role: 'assistant', content: finalContent, model_used: 'nemotron-3-ultra-free', council: council || null },
+      ]);
     }
     return res.status(200).json({ chatId: savedChatId });
   } catch (err) {

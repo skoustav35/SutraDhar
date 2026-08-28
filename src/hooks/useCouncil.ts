@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { auth } from '../lib/firebase';
+import supabase from '../lib/supabase';
 import { rosterFor, type ChatMessage, type CouncilMember, type Phase, type Mode } from '../lib/types';
 
 interface RunArgs {
@@ -7,8 +7,6 @@ interface RunArgs {
   history: { role: string; content: string }[];
   chatId: string | null;
   mode: Mode;
-  /** Restrict live tool use to this agent's connectors (null = all connected). */
-  agentConnectors?: string[] | null;
   onFinalMessage: (msg: ChatMessage) => void;
   onChatId: (id: string) => void;
 }
@@ -26,14 +24,14 @@ interface RunStatus {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const token = await (auth as import('firebase/auth').Auth | undefined)?.currentUser?.getIdToken();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
 
 const PHASE_FROM_STATUS: Record<string, Phase> = {
-  tools: 'tools',
   solving: 'solving',
   answering: 'answering',
   'cross-checking': 'cross-checking',
@@ -71,7 +69,7 @@ export function useCouncil() {
     setProgressNote(st.note || '');
   }, []);
 
-  // Poll a run until it completes or errors – smoother 400ms for reasoning chamber + final delegation
+  // Poll a run until it completes or errors. Resolves with the final status.
   const pollRun = useCallback((runId: string, mode: Mode): Promise<RunStatus> => {
     return new Promise((resolve) => {
       clearPoll();
@@ -82,21 +80,14 @@ export function useCouncil() {
           const headers = await authHeaders();
           const res = await fetch(`/api/run-status?runId=${runId}`, { headers });
           if (res.ok) {
-            const ct = res.headers.get('content-type') || '';
-            const txt = await res.text();
-            try {
-              const st: RunStatus = JSON.parse(txt);
-              if (st.found) {
-                misses = 0;
-                // Smooth apply – batch updates via rAF for reasoning chamber
-                requestAnimationFrame(() => applyStatus(st));
-                if (st.status === 'complete' || st.status === 'error') {
-                  clearPoll();
-                  resolve(st);
-                }
+            const st: RunStatus = await res.json();
+            if (st.found) {
+              misses = 0;
+              applyStatus(st);
+              if (st.status === 'complete' || st.status === 'error') {
+                clearPoll();
+                resolve(st);
               }
-            } catch {
-              // ignore non-JSON (e.g. gateway HTML during deploy)
             }
           } else {
             misses += 1;
@@ -104,13 +95,14 @@ export function useCouncil() {
         } catch {
           misses += 1;
         }
-        if (misses > 525) { // ~3.5 min at 400ms (was 210*2s=7min, now 525*0.4=3.5min for faster fallback)
+        // Give up gracefully after ~14 min of no contact (900s / 4s).
+        if (misses > 210) {
           clearPoll();
           resolve({ found: false, mode });
         }
       };
       tick();
-      pollRef.current = setInterval(tick, 400);
+      pollRef.current = setInterval(tick, 2000);
     });
   }, [applyStatus]);
 
@@ -141,13 +133,13 @@ export function useCouncil() {
     }
   }, [applyStatus, pollRun]);
 
-  const run = useCallback(async ({ prompt, history, chatId, mode, agentConnectors = null, onFinalMessage, onChatId }: RunArgs) => {
+  const run = useCallback(async ({ prompt, history, chatId, mode, onFinalMessage, onChatId }: RunArgs) => {
     stoppedRef.current = false;
     setCouncil(rosterFor(mode));
     setFinalText('');
     setError(null);
     setPhase(mode === 'direct' ? 'answering' : 'solving');
-    setProgressNote('Preparing Sutradhar…');
+    setProgressNote('Convening the council…');
 
     let kickoff: { chatId: string; runId: string; title?: string };
     try {
@@ -155,7 +147,7 @@ export function useCouncil() {
       const res = await fetch('/api/run', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ prompt, mode, chatId, history, agentConnectors }),
+        body: JSON.stringify({ prompt, mode, chatId, history }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));

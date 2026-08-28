@@ -1,11 +1,11 @@
-import { adminDb, adminAuth } from './firebase-admin.js';
+import supabase from './db-client.js';
 
 async function getUser(req) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    return { uid: decoded.uid, email: decoded.email };
+    const { data } = await supabase.auth.getUser(token);
+    return data?.user || null;
   } catch {
     return null;
   }
@@ -22,32 +22,35 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      const snapshot = await adminDb.collection('agents')
-        .where('user_id', '==', user.uid)
-        .orderBy('created_at', 'desc')
-        .get();
-      const agents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      return res.status(200).json(agents);
+      const { data, error } = await supabase
+        .from('agents')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return res.status(200).json(data);
     }
 
     if (req.method === 'POST') {
       const { name, emoji, color, description, system_prompt, skills, connectors, created_by_ai } = req.body || {};
       if (!name) return res.status(400).json({ error: 'Agent name is required' });
-      const docRef = await adminDb.collection('agents').add({
-        user_id: user.uid,
-        name: String(name).slice(0, 80),
-        emoji: emoji || '🧷',
-        color: color || '#c8781e',
-        description: (description || '').slice(0, 500),
-        system_prompt: (system_prompt || '').slice(0, 6000),
-        skills: Array.isArray(skills) ? skills.slice(0, 20) : [],
-        connectors: Array.isArray(connectors) ? connectors.slice(0, 20) : [],
-        created_by_ai: !!created_by_ai,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
-      const doc = await docRef.get();
-      return res.status(201).json({ id: docRef.id, ...doc.data() });
+      const { data, error } = await supabase
+        .from('agents')
+        .insert({
+          user_id: user.id,
+          name: String(name).slice(0, 80),
+          emoji: emoji || '\ud83e\udeb7',
+          color: color || '#c8781e',
+          description: (description || '').slice(0, 500),
+          system_prompt: (system_prompt || '').slice(0, 6000),
+          skills: Array.isArray(skills) ? skills.slice(0, 20) : [],
+          connectors: Array.isArray(connectors) ? connectors.slice(0, 20) : [],
+          created_by_ai: !!created_by_ai,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      return res.status(201).json(data);
     }
 
     if (req.method === 'PUT') {
@@ -58,24 +61,21 @@ export default async function handler(req, res) {
         if (k in fields) patch[k] = fields[k];
       }
       patch.updated_at = new Date().toISOString();
-      const docRef = adminDb.collection('agents').doc(id);
-      const doc = await docRef.get();
-      if (!doc.exists || doc.data().user_id !== user.uid) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
-      await docRef.update(patch);
-      const updated = await docRef.get();
-      return res.status(200).json({ id: docRef.id, ...updated.data() });
+      const { data, error } = await supabase
+        .from('agents')
+        .update(patch)
+        .eq('id', id)
+        .eq('user_id', user.id)
+        .select()
+        .single();
+      if (error) throw error;
+      return res.status(200).json(data);
     }
 
     if (req.method === 'DELETE') {
       const { id } = req.body || {};
-      const docRef = adminDb.collection('agents').doc(id);
-      const doc = await docRef.get();
-      if (!doc.exists || doc.data().user_id !== user.uid) {
-        return res.status(404).json({ error: 'Agent not found' });
-      }
-      await docRef.delete();
+      const { error } = await supabase.from('agents').delete().eq('id', id).eq('user_id', user.id);
+      if (error) throw error;
       return res.status(200).json({ ok: true });
     }
 

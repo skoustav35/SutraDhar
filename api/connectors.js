@@ -1,25 +1,20 @@
-// Real connector management.
-//   GET    /api/connectors?catalog=1  → connected accounts + live provider catalog
-//   POST   /api/connectors            → connect with a credential (verified live)
-//   PUT    /api/connectors            → re-verify an existing connection
-//   DELETE /api/connectors            → disconnect
-import { adminDb, adminAuth } from './firebase-admin.js';
-import { publicCatalog } from './_providers.js';
-import { cors, publicConnector, verifyAndSave, reverify, ProviderError, logEvent } from './_connectors-runtime.js';
+import supabase from './db-client.js';
 
 async function getUser(req) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    return { uid: decoded.uid, email: decoded.email };
+    const { data } = await supabase.auth.getUser(token);
+    return data?.user || null;
   } catch {
     return null;
   }
 }
 
 export default async function handler(req, res) {
-  cors(res);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(204).end();
 
   const user = await getUser(req);
@@ -27,73 +22,58 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      const snapshot = await adminDb.collection('connectors')
-        .where('user_id', '==', user.uid)
-        .orderBy('connected_at', 'desc')
-        .get();
-      const connections = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).map(publicConnector);
-      if (req.query?.catalog === '1') {
-        return res.status(200).json({ connections, catalog: publicCatalog() });
-      }
-      return res.status(200).json(connections);
+      const { data, error } = await supabase
+        .from('connectors')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('connected_at', { ascending: false });
+      if (error) throw error;
+      return res.status(200).json(data);
     }
 
     if (req.method === 'POST') {
-      const { provider, token, extra } = req.body || {};
+      const { provider, account_label, scopes } = req.body || {};
       if (!provider) return res.status(400).json({ error: 'provider required' });
-      const row = await verifyAndSave({
-        userId: user.uid,
-        provider,
-        token,
-        authType: 'token',
-        extra: extra && typeof extra === 'object' ? extra : {},
-      });
-      return res.status(201).json(publicConnector(row));
-    }
-
-    if (req.method === 'PUT') {
-      const { provider } = req.body || {};
-      if (!provider) return res.status(400).json({ error: 'provider required' });
-      await reverify(user.uid, provider);
-      const snapshot = await adminDb.collection('connectors')
-        .where('user_id', '==', user.uid)
-        .where('provider', '==', provider)
-        .limit(1)
-        .get();
-      const data = snapshot.docs[0] ? { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null;
-      return res.status(200).json(publicConnector(data));
+      // Prevent duplicate connections of the same provider
+      const { data: existing } = await supabase
+        .from('connectors')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('provider', provider)
+        .maybeSingle();
+      if (existing) {
+        const { data, error } = await supabase
+          .from('connectors')
+          .update({ status: 'connected', account_label: account_label || '', connected_at: new Date().toISOString() })
+          .eq('id', existing.id)
+          .select()
+          .single();
+        if (error) throw error;
+        return res.status(200).json(data);
+      }
+      const { data, error } = await supabase
+        .from('connectors')
+        .insert({ user_id: user.id, provider, account_label: account_label || '', scopes: scopes || [], status: 'connected' })
+        .select()
+        .single();
+      if (error) throw error;
+      return res.status(201).json(data);
     }
 
     if (req.method === 'DELETE') {
       const { id, provider } = req.body || {};
-      if (id) {
-        const docRef = adminDb.collection('connectors').doc(String(id));
-        const doc = await docRef.get();
-        if (!doc.exists || doc.data().user_id !== user.uid) return res.status(404).json({ error: 'Connector not found' });
-        await docRef.delete();
-      } else if (provider) {
-        const snapshot = await adminDb.collection('connectors').where('user_id', '==', user.uid).where('provider', '==', provider).get();
-        if (snapshot.empty) return res.status(404).json({ error: 'Connector not found' });
-        const batch = adminDb.batch();
-        snapshot.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-      } else return res.status(400).json({ error: 'id or provider required' });
-      
-      await logEvent({
-        userId: user.uid,
-        provider: provider || 'unknown',
-        action: 'disconnect',
-        status: 'ok',
-        summary: 'Connection removed',
-        source: 'manual',
-      });
+      let q = supabase.from('connectors').delete().eq('user_id', user.id);
+      if (id) q = q.eq('id', id);
+      else if (provider) q = q.eq('provider', provider);
+      else return res.status(400).json({ error: 'id or provider required' });
+      const { error } = await q;
+      if (error) throw error;
       return res.status(200).json({ ok: true });
     }
 
-    return res.status(405).json({ error: 'Method not allowed' });
+    res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
-    const status = err instanceof ProviderError ? err.status || 400 : 500;
     console.error('connectors error', err);
-    return res.status(status).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 }

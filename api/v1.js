@@ -1,4 +1,4 @@
-import { adminDb } from './firebase-admin.js';
+import supabase from './db-client.js';
 import { corsHeaders, streamHeaders, sse, runPipeline, MODEL_NAMES, MODEL_SLUGS, resolveModel, MODEL_SLUG_BY_MODE } from './_llm.js';
 
 // Progress events are presented as a single model's reasoning phases. We only
@@ -27,14 +27,14 @@ export default async function handler(req, res) {
   }
 
   // Validate the key
-  console.log('Checking api_keys...'); let keyRow = null;
+  let keyRow = null;
   try {
-    console.log('Fetching snapshot...'); const snapshot = await adminDb.collection('api_keys').where('key', '==', apiKey).where('revoked', '==', false).limit(1).get();
-    keyRow = snapshot.docs[0] ? { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null;
+    const { data } = await supabase.from('api_keys').select('*').eq('key', apiKey).eq('revoked', false).maybeSingle();
+    keyRow = data;
   } catch (e) {
     return res.status(500).json({ error: 'Key validation failed: ' + e.message });
   }
-  console.log('KeyRow:', keyRow); if (!keyRow) return res.status(403).json({ error: 'API key not recognized or has been revoked.' });
+  if (!keyRow) return res.status(403).json({ error: 'API key not recognized or has been revoked.' });
 
   const { prompt, model, mode, stream = false } = req.body || {};
   if (!prompt || typeof prompt !== 'string') return res.status(400).json({ error: 'Missing "prompt" (string) in request body.' });
@@ -45,7 +45,10 @@ export default async function handler(req, res) {
   }
 
   // Update usage (fire and forget)
-  adminDb.collection('api_keys').doc(keyRow.id).update({ last_used_at: new Date().toISOString(), request_count: (keyRow.request_count || 0) + 1 })
+  supabase
+    .from('api_keys')
+    .update({ last_used_at: new Date().toISOString(), request_count: (keyRow.request_count || 0) + 1 })
+    .eq('id', keyRow.id)
     .then(() => {}, () => {});
 
   // -------- Streaming response (progress + final) --------
@@ -54,7 +57,7 @@ export default async function handler(req, res) {
     res.write(': open\n\n');
     const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 12000);
     try {
-      console.log('Running pipeline...'); const result = await runPipeline({
+      const result = await runPipeline({
         prompt,
         mode: resolved,
         onProgress: (ev) => { const p = publicEvent(ev); if (p) sse(res, p); },
@@ -72,7 +75,7 @@ export default async function handler(req, res) {
   // -------- Non-streaming JSON response --------
   try {
     const result = await runPipeline({ prompt, mode: resolved });
-    console.log('Returning 200'); return res.status(200).json({
+    return res.status(200).json({
       id: 'cmpl-' + Date.now(),
       object: 'chat.completion',
       model: MODEL_NAMES[result.mode] || 'Sutradhar 6.7',

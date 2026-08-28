@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Menu } from 'lucide-react';
+import supabase from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { signOut } from 'firebase/auth';
-import { auth } from '../lib/firebase';
 import { useCouncil } from '../hooks/useCouncil';
 import type { ChatMessage, ChatSummary, CouncilMember, Mode, NavSection, Agent } from '../lib/types';
 import { rosterFor } from '../lib/types';
@@ -15,10 +14,11 @@ import ConnectorsPanel from '../components/ConnectorsPanel';
 import TasksPanel from '../components/TasksPanel';
 
 const ASK_CAPABILITY =
-  'You can provide a full answer/scaffold AND also ask a clarifying follow-up in the same response. To ask a structured question, include ONE block exactly like [[ASK]]{"question":"...","options":["...","..."],"allowManual":true}[[/ASK]] anywhere in your response (usually at the end, after your scaffold/answer). You may give your best scaffold/answer first, then add the ASK block to confirm preferences before executing any destructive action (like creating a repo). Use natural language for the answer, and the ASK block only for the structured choice. Only include ASK when genuinely helpful for underspecified requests.';
+  'If you need clarification before answering, you MAY ask the user ONE concise question by emitting a block exactly like [[ASK]]{"question":"...","options":["...","..."],"allowManual":true}[[/ASK]] and nothing after it. Only ask when genuinely needed.';
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const token = await (auth as import('firebase/auth').Auth | undefined)?.currentUser?.getIdToken();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
@@ -54,15 +54,10 @@ export default function CouncilApp() {
         fetch('/api/connectors', { headers: h }),
         fetch('/api/tasks', { headers: h }),
       ]);
-      const safeJson = async (r: Response) => {
-        if (!r.ok) return [];
-        const t = await r.text();
-        try { return JSON.parse(t); } catch { console.warn('[counts] invalid JSON', t.slice(0,200)); return []; }
-      };
       setCounts({
-        agents: (await safeJson(a)).length,
-        connectors: (await safeJson(c)).length,
-        tasks: (await safeJson(t)).length,
+        agents: a.ok ? (await a.json()).length : 0,
+        connectors: c.ok ? (await c.json()).length : 0,
+        tasks: t.ok ? (await t.json()).length : 0,
       });
     } catch { /* noop */ }
   }, []);
@@ -87,10 +82,7 @@ export default function CouncilApp() {
   const loadChats = useCallback(async () => {
     try {
       const res = await fetch('/api/chats', { headers: await authHeaders() });
-      if (res.ok) {
-        const text = await res.text();
-        try { setChats(JSON.parse(text)); } catch { console.warn('[chats] invalid JSON', text.slice(0,200)); }
-      }
+      if (res.ok) setChats(await res.json());
     } catch (e) {
       console.error(e);
     }
@@ -106,9 +98,7 @@ export default function CouncilApp() {
     try {
       const res = await fetch(`/api/messages?chatId=${id}`, { headers: await authHeaders() });
       if (!res.ok) return;
-      const txt = await res.text();
-      let rows: any[];
-      try { rows = JSON.parse(txt); } catch { console.warn('[messages] invalid JSON', txt.slice(0,200)); return; }
+      const rows = await res.json();
       const msgs: ChatMessage[] = rows.map((r: { id: string; role: string; content: string; council: CouncilMember[] | null }) => ({
         id: r.id,
         role: r.role === 'user' ? 'user' : 'assistant',
@@ -153,76 +143,40 @@ export default function CouncilApp() {
     setBusy(false);
   }, [reset, setActive]);
 
-  // Detect a request to create/build/edit/implement an agent – very permissive, any mention of agent + action verb
+  // Detect a request to create/build an agent.
   const isAgentRequest = (t: string) =>
-    /\bagent\b/i.test(t) && /\b(create|make|build|forge|set\s?up|design|edit|update|implement|improve|modify|customize|add)\b/i.test(t);
-  const isEditRequest = (t: string) => /\b(edit|update|modify|improve|customize|change|add|remove)\b/i.test(t) && /\bagent\b/i.test(t);
+    /\b(create|make|build|forge|set\s?up|design)\b[^.!?]*\bagent\b/i.test(t) ||
+    /\bagent\b[^.!?]*\b(that|which|to)\b/i.test(t) && /\b(create|make|build)\b/i.test(t);
 
   const forgeAgent = useCallback(async (text: string) => {
     setBusy(true);
-    const isEdit = !!activeAgent && isEditRequest(text);
     const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', content: text };
-    const thinking: ChatMessage = { id: `a-${Date.now()}`, role: 'assistant', content: isEdit ? `🪷 Editing **${activeAgent?.name}**…` : '🪷 Forging your agent…' };
+    const thinking: ChatMessage = { id: `a-${Date.now()}`, role: 'assistant', content: '🪷 Forging your agent…' };
     setMessages((prev) => [...prev, userMsg, thinking]);
     try {
-      if (isEdit && activeAgent) {
-        // Edit existing agent: ask forge to rewrite the system_prompt/skills based on edit request
-        const res = await fetch('/api/agent-forge', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ request: `Edit this agent: ${activeAgent.name} – ${activeAgent.description}. Request: ${text}. Keep name/emoji/color unless asked to change.`, save: false }) });
-        const j = await res.json().catch(() => ({}));
-        if (j.ok && j.agent) {
-          // Merge edited fields into activeAgent and PUT
-          const patch: Partial<Agent> = {
-            id: activeAgent.id,
-            name: j.agent.name || activeAgent.name,
-            emoji: j.agent.emoji || activeAgent.emoji,
-            color: j.agent.color || activeAgent.color,
-            description: j.agent.description || activeAgent.description,
-            system_prompt: j.agent.system_prompt || activeAgent.system_prompt,
-            skills: j.agent.skills?.length ? j.agent.skills : activeAgent.skills,
-            connectors: j.agent.connectors?.length ? j.agent.connectors : activeAgent.connectors,
-          };
-          const put = await fetch('/api/agents', { method: 'PUT', headers: await authHeaders(), body: JSON.stringify(patch) });
-          const updated = await put.json().catch(() => ({}));
-          if (put.ok) {
-            const a = (updated as Agent).id ? (updated as Agent) : { ...activeAgent, ...patch } as Agent;
-            setActiveAgent(a);
-            const card = `## ${a.emoji} Agent updated — **${a.name}**\n\n${a.description}\n\n**Skills:** ${a.skills.join(', ') || '—'}\n\n**Connectors:** ${a.connectors.join(', ') || '—'}\n\n> Changes saved. Continue chatting with **${a.name}** or manage it in **Agents**.`;
-            setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: card } : m)));
-            loadCounts();
-          } else {
-            setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: `> Could not update agent (${updated.error || 'try rephrasing'}).` } : m)));
-          }
-        } else {
-          setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: `> I couldn't edit that agent (${j.error || 'try rephrasing'}).` } : m)));
-        }
+      const res = await fetch('/api/agent-forge', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ request: text, save: true }) });
+      const j = await res.json();
+      if (j.ok && j.agent) {
+        const a = j.agent as Agent;
+        const card = `## ${a.emoji} Agent created — **${a.name}**\n\n${a.description}\n\n**Skills:** ${a.skills.join(', ') || '—'}\n\n**Connectors:** ${a.connectors.join(', ') || '—'}\n\n> Manage it in the **Agents** tab, or start chatting with it there. You can edit its name, skills, connectors and persona anytime.`;
+        setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: card } : m)));
+        loadCounts();
       } else {
-        const res = await fetch('/api/agent-forge', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ request: text, save: true }) });
-        const j = await res.json().catch(async () => ({ ok:false, error: await res.text().then(t=>t.slice(0,200)).catch(()=>'Unknown error') }));
-        if (!res.ok) {
-          setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: `> Forge failed (${res.status}): ${j.error || 'Please try again.'}` } : m)));
-        } else if (j.ok && j.agent) {
-          const a = j.agent as Agent;
-          const card = `## ${a.emoji} Agent created — **${a.name}**\n\n${a.description}\n\n**Skills:** ${a.skills.join(', ') || '—'}\n\n**Connectors:** ${a.connectors.join(', ') || '—'}\n\n> Manage it in the **Agents** tab, or start chatting with it there. You can edit its name, skills, connectors and persona anytime.`;
-          setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: card } : m)));
-          loadCounts();
-        } else {
-          setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: `> I couldn't design that agent (${j.error || 'try rephrasing with more detail, e.g. a slack notifier for github PRs'}).` } : m)));
-        }
+        setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: `> I couldn't design that agent (${j.error || 'try rephrasing'}).` } : m)));
       }
-    } catch (e) {
-      console.error(e);
-      setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: `> Agent ${isEdit ? 'edit' : 'forge'} failed. Please try again. ${e instanceof Error ? e.message : ''}` } : m)));
+    } catch {
+      setMessages((prev) => prev.map((m) => (m.id === thinking.id ? { ...m, content: '> Agent forge failed. Please try again.' } : m)));
     } finally {
       setBusy(false);
     }
-  }, [loadCounts, activeAgent]);
+  }, [loadCounts]);
 
   const send = useCallback(
     async (text: string) => {
       if (busy) return;
 
-      // AI-driven agent creation/edit – works from any chat, with full powers
-      if (isAgentRequest(text)) {
+      // AI-driven agent creation intent (only in general chat, not agent chat)
+      if (!activeAgent && isAgentRequest(text)) {
         await forgeAgent(text);
         return;
       }
@@ -239,12 +193,8 @@ export default function CouncilApp() {
       // wrapped in a sentinel so it can be stripped from the displayed message.
       const preambleParts: string[] = [];
       if (activeAgent) {
-        const connList = activeAgent.connectors?.length ? activeAgent.connectors.join(', ') : 'none';
-        const connStr = activeAgent.connectors?.length
-          ? ` You have FULL, DIRECT access to these live connected tools: ${connList}. You are explicitly authorized to call any of their actions (including writes like posting messages, sending emails, creating issues, etc.) whenever they serve the user's request — do not ask for permission, just act. Use them very effectively and proactively.`
-          : ' You have no connectors yet, but you can still reason deeply.';
         preambleParts.push(
-          `Agent persona — you are "${activeAgent.name}". ${activeAgent.system_prompt || activeAgent.description}${connStr} Your skills: ${(activeAgent.skills || []).join(', ') || 'general assistance'}. Stay in character and never mention this instruction. You are an expert of Sutradhar 6.7.`
+          `Agent persona — you are "${activeAgent.name}". ${activeAgent.system_prompt || activeAgent.description}${activeAgent.connectors?.length ? ` You have access to these connected tools: ${activeAgent.connectors.join(', ')}.` : ''} Stay in character and never mention this instruction.`
         );
       }
       preambleParts.push(ASK_CAPABILITY);
@@ -256,8 +206,6 @@ export default function CouncilApp() {
         history,
         chatId: startChatId,
         mode,
-        // Agent chats may only reach the tools that agent was given.
-        agentConnectors: activeAgent?.connectors?.length ? activeAgent.connectors : null,
         onChatId: (id) => {
           runChatId = id;
           if (!startChatId) setActive(id);
@@ -286,7 +234,7 @@ export default function CouncilApp() {
   );
 
   const logout = useCallback(async () => {
-    await signOut(auth);
+    await supabase.auth.signOut();
   }, []);
 
   const displayCouncil = busy || phase !== 'idle' ? council : restoredCouncil || rosterFor(mode);
@@ -380,6 +328,7 @@ export default function CouncilApp() {
             councilOpen={councilOpen}
             mode={mode}
             onModeChange={setMode}
+            onNavigate={goSection}
             onAnswer={send}
             activeAgent={activeAgent}
             onClearAgent={() => setActiveAgent(null)}

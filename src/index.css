@@ -1,5 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Marcellus&family=Rozha+One&family=Yatra+One&family=Jost:wght@300;400;500;600&display=swap');
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Marcellus&family=Rozha+One&family=Yatra+One&family=Jost:wght@300;400;500;600&display=swap');
 
 /* Drive Tailwind's dark: variant from the <html data-theme> attribute. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
@@ -844,23 +844,15 @@ html[data-theme="light"] .ask-option { background: #fdf8ec; border-color: rgba(3
 html[data-theme="light"] .ask-option:hover { border-color: rgba(178,90,26,0.45); color: #6a4310; }
 html[data-theme="light"] .ask-option--on { background: rgba(200,120,30,0.14); border-color: rgba(178,90,26,0.5); color: #6a4310; }
 
-/* Research shortcut in the top pane — compact icon-only square button.
-   Fixed 36px footprint so it can never crowd the model selector on mobile. */
+/* Research shortcut chip in top pane */
 .research-chip {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 2.25rem; height: 2.25rem; flex-shrink: 0;
-  border-radius: 0.75rem;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 0.7rem; border-radius: 0.75rem; font-size: 13px;
   background: rgba(47,122,92,0.12); color: #8fd4b4; border: 1px solid rgba(47,122,92,0.3);
-  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  transition: all 0.18s ease;
 }
-.research-chip:hover { border-color: rgba(47,122,92,0.55); background: rgba(47,122,92,0.2); color: #b6e8cf; }
-.research-chip:active { transform: scale(0.94); }
+.research-chip:hover { border-color: rgba(47,122,92,0.5); transform: translateY(-1px); }
 html[data-theme="light"] .research-chip { background: rgba(30,110,80,0.1); color: #1e6e50; border: 1px solid rgba(30,110,80,0.32); }
-html[data-theme="light"] .research-chip:hover { background: rgba(30,110,80,0.16); color: #14523c; }
-
-/* Research roadmap timeline node — sits on top of the connecting line */
-.roadmap-dot { background: #1a1510; }
-html[data-theme="light"] .roadmap-dot { background: #fdf8ec; }
 
 /* Active agent banner */
 .agent-banner {

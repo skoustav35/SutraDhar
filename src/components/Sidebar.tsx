@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { Plus, MessageSquare, Trash2, LogOut, X, KeyRound, Sun, Moon, Bot, Plug, Clock, FlaskConical } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
-import type { User } from 'firebase/auth';
+import type { User } from '@supabase/supabase-js';
 import type { ChatSummary, NavSection } from '../lib/types';
 import Mandala from './Mandala';
 
@@ -39,8 +39,8 @@ function groupChats(chats: ChatSummary[]) {
 export default function Sidebar({ chats, activeId, section, counts, user, onNew, onSelect, onDelete, onLogout, onSection, onClose }: Props) {
   const { theme, toggle } = useTheme();
   const grouped = useMemo(() => groupChats(chats), [chats]);
-  const name = user?.displayName || user?.email?.split('@')[0] || 'Seeker';
-  const avatar = user?.photoURL || null;
+  const name = (user?.user_metadata?.full_name as string) || (user?.user_metadata?.name as string) || user?.email?.split('@')[0] || 'Seeker';
+  const avatar = (user?.user_metadata?.avatar_url as string) || (user?.user_metadata?.picture as string) || null;
 
   const nav: { id: NavSection; label: string; icon: React.ReactNode; count?: number }[] = [
     { id: 'chats', label: 'Chats', icon: <MessageSquare size={15} /> },

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, X, AlertTriangle, Check, Cpu, GitCompareArrows, Sparkles, Waypoints, Activity, Timer, Layers, Plug } from 'lucide-react';
+import { ChevronDown, X, AlertTriangle, Check, Cpu, GitCompareArrows, Sparkles, Waypoints, Activity, Timer, Layers } from 'lucide-react';
 import type { CouncilMember, Phase } from '../lib/types';
 import Mandala from './Mandala';
 
@@ -117,13 +117,12 @@ function ComputeMeter({ council, phase }: { council: CouncilMember[]; phase: Pha
 
 function PipelineBar({ phase }: { phase: Phase }) {
   const steps = [
-    { key: 'tools', label: 'Tools', icon: <Plug size={13} /> },
     { key: 'solving', label: 'Reason', icon: <Cpu size={13} /> },
     { key: 'cross-checking', label: 'Verify', icon: <GitCompareArrows size={13} /> },
     { key: 'judging', label: 'Synthesize', icon: <Sparkles size={13} /> },
   ];
-  const order = ['tools', 'solving', 'cross-checking', 'judging', 'done'];
-  const curIdx = order.indexOf(phase === 'done' ? 'judging' : phase === 'answering' ? 'solving' : phase);
+  const order = ['solving', 'cross-checking', 'judging', 'done'];
+  const curIdx = order.indexOf(phase === 'done' ? 'judging' : phase);
   return (
     <div className="flex items-center gap-1 px-4 py-3 border-b border-[#c9a24a]/20 dark:border-[#b87333]/15">
       {steps.map((s, i) => {

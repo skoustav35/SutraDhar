@@ -1,12 +1,12 @@
-import { adminDb, adminAuth } from './firebase-admin.js';
+import supabase from './db-client.js';
 import crypto from 'crypto';
 
 async function getUser(req) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    return { uid: decoded.uid, email: decoded.email };
+    const { data } = await supabase.auth.getUser(token);
+    return data?.user || null;
   } catch {
     return null;
   }
@@ -23,37 +23,31 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      const snapshot = await adminDb.collection('api_keys')
-        .where('user_id', '==', user.uid)
-        .orderBy('created_at', 'desc')
-        .get();
-      const keys = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      return res.status(200).json(keys);
+      const { data, error } = await supabase
+        .from('api_keys')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return res.status(200).json(data);
     }
 
     if (req.method === 'POST') {
       const { name } = req.body || {};
       const key = 'sk-council-' + crypto.randomBytes(24).toString('hex');
-      const docRef = await adminDb.collection('api_keys').add({
-        user_id: user.uid,
-        name: (name || 'Default key').slice(0, 60),
-        key,
-        revoked: false,
-        request_count: 0,
-        created_at: new Date().toISOString(),
-      });
-      const doc = await docRef.get();
-      return res.status(201).json({ id: docRef.id, ...doc.data() });
+      const { data, error } = await supabase
+        .from('api_keys')
+        .insert({ user_id: user.id, name: (name || 'Default key').slice(0, 60), key, revoked: false, request_count: 0 })
+        .select()
+        .single();
+      if (error) throw error;
+      return res.status(201).json(data);
     }
 
     if (req.method === 'DELETE') {
       const { id } = req.body || {};
-      const docRef = adminDb.collection('api_keys').doc(id);
-      const doc = await docRef.get();
-      if (!doc.exists || doc.data().user_id !== user.uid) {
-        return res.status(404).json({ error: 'Key not found' });
-      }
-      await docRef.delete();
+      const { error } = await supabase.from('api_keys').delete().eq('id', id).eq('user_id', user.id);
+      if (error) throw error;
       return res.status(200).json({ ok: true });
     }
 

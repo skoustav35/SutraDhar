@@ -1,35 +1,41 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import type { User } from 'firebase/auth';
-import { auth, isFirebaseConfigured } from '../lib/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import type { Session, User } from '@supabase/supabase-js';
+import supabase from '../lib/supabase';
 
 interface AuthValue {
   user: User | null;
+  session: Session | null;
   loading: boolean;
 }
 
-const AuthContext = createContext<AuthValue>({ user: null, loading: true });
+const AuthContext = createContext<AuthValue>({ user: null, session: null, loading: true });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!isFirebaseConfigured || !auth) {
-      console.warn('[Auth] Firebase not configured');
-      setLoading(false);
-      return;
-    }
-    const unsubscribe = onAuthStateChanged(auth as import('firebase/auth').Auth, (currentUser) => {
-      setUser(currentUser);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  return <AuthContext.Provider value={{ user, loading }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, session, loading }}>{children}</AuthContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);
